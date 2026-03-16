@@ -2726,7 +2726,7 @@ For more information, refer to the Textractor documentation.
                             # Process text through plugins in background thread
                             processed_text = self.process_text_through_plugins(text + "\n")
                             if processed_text is not None:
-                                self.root.after(0, self.append_output, processed_text, False)
+                                self.root.after(0, self.append_output, processed_text, False, True)
                     elif not self.selected_hook_id and not self.silent_auto_launch:
                         # Only show hook preview if not in silent auto-launch mode
                         # Process text through plugins in background thread
@@ -2795,7 +2795,7 @@ For more information, refer to the Textractor documentation.
                         if text:
                             processed_text = self.process_text_through_plugins(text + "\n")
                             if processed_text is not None:
-                                self.root.after(0, self.append_output, processed_text, False)
+                                self.root.after(0, self.append_output, processed_text, False, True)
                     elif not self.selected_hook_id and not self.silent_auto_launch:
                         # Only show hook preview if not in silent auto-launch mode
                         processed_text = self.process_text_through_plugins(f"[Hook #{hook_id}] {text}\n")
@@ -2878,7 +2878,7 @@ For more information, refer to the Textractor documentation.
         except Exception as e:
             messagebox.showerror("Error", f"Failed to select hook:\n{str(e)}")
     
-    def append_output(self, text, process_plugins=True):
+    def append_output(self, text, process_plugins=True, allow_auto_copy=False):
         """Append text to the output area with plugin filtering"""
         if process_plugins:
             # Process text through active plugins
@@ -2899,8 +2899,8 @@ For more information, refer to the Textractor documentation.
         # Update statistics
         self.update_statistics(processed_text)
         
-        # Auto-copy if enabled
-        if self.auto_copy_enabled.get():
+        # Auto-copy only for extracted dialogue text explicitly marked as safe
+        if self.auto_copy_enabled.get() and allow_auto_copy:
             self.auto_copy_text(processed_text)
     
     
