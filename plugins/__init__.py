@@ -51,6 +51,7 @@ class TextractorPlugin(ABC):
     description: str = "No description provided"
     version: str = "1.0"
     author: str = "Unknown"
+    is_translation_plugin: bool = False
     
     def __init__(self):
         """Initialize the plugin. Override to add custom initialization."""
@@ -71,6 +72,25 @@ class TextractorPlugin(ABC):
             - Empty string to filter out but continue processing
         """
         pass
+
+    def process_clipboard_text(self, text: str) -> Optional[str]:
+        """
+        Process text for clipboard output.
+
+        By default this mirrors the normal display pipeline. Plugins that add
+        translations, trigger display/network side effects, or otherwise should
+        not affect clipboard content can override this to return the original
+        text unchanged.
+        """
+        return self.process_text(text)
+
+    def translate_text(self, text: str) -> Optional[str]:
+        """
+        Return only the translated text for translation plugins.
+
+        Non-translation plugins should leave this as None.
+        """
+        return None
     
     def reset(self):
         """

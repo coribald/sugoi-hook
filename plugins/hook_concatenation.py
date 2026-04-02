@@ -35,6 +35,7 @@ class HookConcatenationPlugin(TextractorPlugin):
         
         # Runtime state
         self._state['hook_buffers'] = {}  # Store latest text for each hook: {hook_id: text}
+        self._state['clipboard_hook_buffers'] = {}
         
         # Pattern to match hook output format: [Hook X] text or [Hook #X] text
         self._hook_pattern = re.compile(r'^\[Hook #?(\d+)\]\s*(.*)$', re.IGNORECASE)
@@ -102,6 +103,50 @@ class HookConcatenationPlugin(TextractorPlugin):
             # Not a hook output format
             # For safety, pass through any text that doesn't match our pattern
             return text
+
+    def process_clipboard_text(self, text: str) -> Optional[str]:
+        """
+        Apply hook concatenation to clipboard output with independent buffers so
+        the display pipeline doesn't consume clipboard state.
+        """
+        if not self._state['enabled_mode']:
+            return text
+
+        hook_ids = self._parse_hook_ids()
+        if not hook_ids:
+            return text
+
+        text_stripped = text.strip()
+
+        if text_stripped.startswith('[Console]'):
+            return text
+
+        match = self._hook_pattern.match(text_stripped)
+
+        if match:
+            hook_id = match.group(1)
+            hook_text = match.group(2).strip()
+
+            if hook_id in hook_ids:
+                if hook_id in self._state['clipboard_hook_buffers']:
+                    self._state['clipboard_hook_buffers'] = {}
+
+                if hook_text:
+                    self._state['clipboard_hook_buffers'][hook_id] = hook_text
+
+                concatenated = self._build_concatenated_output(
+                    hook_ids,
+                    buffer_key='clipboard_hook_buffers'
+                )
+
+                if concatenated:
+                    return concatenated
+
+                return None
+            else:
+                return None
+
+        return text
     
     def _parse_hook_ids(self) -> list:
         """Parse hook IDs from the settings string."""
@@ -118,13 +163,14 @@ class HookConcatenationPlugin(TextractorPlugin):
         
         return hook_ids
     
-    def _build_concatenated_output(self, hook_ids: list) -> str:
+    def _build_concatenated_output(self, hook_ids: list, buffer_key: str = 'hook_buffers') -> str:
         """Build concatenated output from buffers in the specified order."""
         output_parts = []
+        hook_buffers = self._state.get(buffer_key, {})
         
         for hook_id in hook_ids:
-            if hook_id in self._state['hook_buffers']:
-                hook_text = self._state['hook_buffers'][hook_id]
+            if hook_id in hook_buffers:
+                hook_text = hook_buffers[hook_id]
                 if hook_text:  # Only include non-empty text
                     output_parts.append(hook_text)
         
@@ -139,6 +185,7 @@ class HookConcatenationPlugin(TextractorPlugin):
     def reset(self):
         """Reset the plugin state."""
         self._state['hook_buffers'] = {}
+        self._state['clipboard_hook_buffers'] = {}
     
     def on_enable(self):
         """Called when plugin is enabled."""

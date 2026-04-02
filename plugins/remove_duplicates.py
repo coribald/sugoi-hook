@@ -27,6 +27,7 @@ class RemoveDuplicatesPlugin(TextractorPlugin):
     def __init__(self):
         super().__init__()
         self._state['seen_texts'] = set()
+        self._state['clipboard_seen_texts'] = set()
         self._state['min_length'] = 10  # Minimum length for duplicate checking
     
     def remove_inline_duplicates(self, text: str) -> str:
@@ -112,10 +113,37 @@ class RemoveDuplicatesPlugin(TextractorPlugin):
         
         # Preserve the newline if original had it
         return text_clean + '\n' if text.endswith('\n') else text_clean
+
+    def process_clipboard_text(self, text: str) -> Optional[str]:
+        """
+        Apply duplicate filtering to clipboard output with independent state so
+        the display pass does not consume clipboard entries first.
+        """
+        text_clean = text.strip()
+
+        if not text_clean:
+            return text
+
+        text_clean = self.remove_inline_duplicates(text_clean)
+        text_normalized = ''.join(text_clean.split())
+
+        if len(text_normalized) < self._state['min_length']:
+            return text_clean + '\n' if text.endswith('\n') else text_clean
+
+        if text_normalized in self._state['clipboard_seen_texts']:
+            return None
+
+        for seen in self._state['clipboard_seen_texts']:
+            if text_normalized in seen or seen in text_normalized:
+                return None
+
+        self._state['clipboard_seen_texts'].add(text_normalized)
+        return text_clean + '\n' if text.endswith('\n') else text_clean
     
     def reset(self):
         """Reset the seen texts tracking."""
         self._state['seen_texts'] = set()
+        self._state['clipboard_seen_texts'] = set()
     
     def get_settings(self) -> dict:
         """Get plugin settings."""

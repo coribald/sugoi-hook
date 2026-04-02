@@ -35,6 +35,7 @@ class TranslatorPlusPlusPlugin(TextractorPlugin):
     description = "Translates using Translator++ Translation Proxy (30+ endpoints)"
     version = "1.0"
     author = "Dreamsavior (dreamsavior@gmail.com / dreamsavior.net)"
+    is_translation_plugin = True
     
     def __init__(self):
         super().__init__()
@@ -76,49 +77,54 @@ class TranslatorPlusPlusPlugin(TextractorPlugin):
             self.on_enable()
         
         try:
-            # Prepare the request payload
-            payload = {
-                "text": [text.strip()],
-                "target_lang": self.target_lang
-            }
-            
-            # Add source language if specified
-            if self.source_lang and self.source_lang.lower() != "auto":
-                payload["source_lang"] = self.source_lang
-            
-            # Make the translation request
+            translated = self.translate_text(text)
+            if translated:
+                return f"{text.rstrip()}\n{translated}\n\n"
+            return text
+        except Exception:
+            return text
+
+    def process_clipboard_text(self, text: str) -> Optional[str]:
+        """Keep clipboard text untranslated while other cleanup plugins run."""
+        return text
+
+    def translate_text(self, text: str) -> Optional[str]:
+        if not text or not text.strip() or not self.enabled:
+            return None
+
+        if self.session is None:
+            self.on_enable()
+
+        payload = {
+            "text": [text.strip()],
+            "target_lang": self.target_lang
+        }
+
+        if self.source_lang and self.source_lang.lower() != "auto":
+            payload["source_lang"] = self.source_lang
+
+        try:
             response = self.session.post(
                 self.proxy_url,
                 json=payload,
                 timeout=self.timeout,
                 headers={"Content-Type": "application/json"}
             )
-            
-            # Check if request was successful
+
             if response.status_code == 200:
                 result = response.json()
-                
-                # Extract translated text from response
-                # The API returns translations in a "translations" array
                 if "translations" in result and len(result["translations"]) > 0:
                     translated = result["translations"][0].get("text", "")
                     if translated:
-                        # Return original text with translation, separated by newline
-                        # Add double newline at the end for spacing between blocks
-                        return f"{text.rstrip()}\n{translated}\n\n"
-            
-            # If translation failed, return original text
-            return text
-            
+                        return translated.strip()
         except requests.exceptions.Timeout:
-            # Timeout - return original text
-            return text
+            return None
         except requests.exceptions.ConnectionError:
-            # Connection failed - proxy might not be running
-            return text
+            return None
         except Exception:
-            # Any other error - return original text
-            return text
+            return None
+
+        return None
     
     def reset(self):
         """Reset the plugin state."""

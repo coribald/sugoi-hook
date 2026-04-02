@@ -3,6 +3,7 @@ from tkinter import font as tkfont
 from plugins import TextractorPlugin
 import sys
 import json
+import re
 from pathlib import Path
 
 class OverlayWindowPlugin(TextractorPlugin):
@@ -201,15 +202,7 @@ class OverlayWindowPlugin(TextractorPlugin):
         if not self.enabled:
             return text
             
-        # Check if Google Translate plugin is enabled
-        is_translator_enabled = False
-        try:
-            if 'google_translate' in sys.modules:
-                module = sys.modules['google_translate']
-                if hasattr(module, 'plugin') and module.plugin.enabled:
-                    is_translator_enabled = True
-        except Exception:
-            pass
+        is_translator_enabled = self._is_translation_plugin_enabled()
 
         display_text = text
         
@@ -222,6 +215,22 @@ class OverlayWindowPlugin(TextractorPlugin):
         
         return text
 
+    def process_clipboard_text(self, text: str):
+        """Overlay is display-only and should not alter clipboard text."""
+        return text
+
+    def _is_translation_plugin_enabled(self) -> bool:
+        """Detect whether any translation plugin is currently enabled."""
+        for module in list(sys.modules.values()):
+            try:
+                plugin = getattr(module, 'plugin', None)
+                if plugin and getattr(plugin, 'enabled', False) and getattr(plugin, 'is_translation_plugin', False):
+                    return True
+            except Exception:
+                pass
+
+        return False
+
     def update_text(self, text, is_translator_enabled):
         if self.text_widget:
             self.text_widget.config(state='normal')
@@ -230,20 +239,33 @@ class OverlayWindowPlugin(TextractorPlugin):
             if not is_translator_enabled:
                 self.text_widget.insert(tk.END, "Please enable the translation plugin", "warning")
             else:
-                # Handle text with translation (original + translation format)
                 clean_text = text.strip()
                 parts = clean_text.split('\n')
-                
-                if len(parts) >= 2:
-                    # Heuristic: Last part is translation, rest is original
+                labeled_translation_pattern = re.compile(r'^\[([^\]]+)\]\s+(.*)$')
+
+                translation_lines = []
+                original_lines = []
+
+                for line in parts:
+                    match = labeled_translation_pattern.match(line)
+                    if match:
+                        plugin_name = match.group(1)
+                        translated_text = match.group(2)
+                        translation_lines.append(f"[{plugin_name}] {translated_text}")
+                    else:
+                        original_lines.append(line)
+
+                if translation_lines:
+                    for translation_line in translation_lines:
+                        self.text_widget.insert(tk.END, translation_line + "\n", "translation")
+                    if original_lines:
+                        self.text_widget.insert(tk.END, "\n" + "\n".join(original_lines), "original")
+                elif len(parts) >= 2:
                     translation = parts[-1]
                     original = '\n'.join(parts[:-1])
-                    
-                    # Display translation first (top), then original (bottom)
                     self.text_widget.insert(tk.END, translation + "\n", "translation")
                     self.text_widget.insert(tk.END, original, "original")
                 else:
-                    # Fallback - single line, treat as original
                     self.text_widget.insert(tk.END, clean_text, "original")
             
             self.text_widget.config(state='disabled')

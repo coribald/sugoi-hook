@@ -439,23 +439,92 @@ class ModernTextractorGUI:
             return text
         
         current_text = text
+        translation_plugins = []
+        post_translation_plugins = []
+        translation_phase_started = False
         
         # Determine execution order: plugin_order filtered by active state
         execution_order = [p for p in self.plugin_order if p in self.active_plugins]
         
-        # Iterate over the execution order
+        for plugin_filename in execution_order:
+            if plugin_filename in self.plugins:
+                plugin = self.plugins[plugin_filename]
+                if not plugin.enabled:
+                    continue
+
+                if getattr(plugin, 'is_translation_plugin', False):
+                    translation_phase_started = True
+                    translation_plugins.append(plugin)
+                    continue
+
+                if translation_phase_started:
+                    post_translation_plugins.append(plugin)
+                    continue
+
+                try:
+                    result = plugin.process_text(current_text)
+                    if result is None:
+                        return None
+                    current_text = result
+                except Exception:
+                    pass
+
+        if translation_plugins:
+            base_text = current_text
+            translation_results = []
+
+            for plugin in translation_plugins:
+                try:
+                    translated = plugin.translate_text(base_text)
+                    if translated:
+                        translation_results.append((plugin.name, translated.strip()))
+                except Exception:
+                    pass
+
+            if translation_results:
+                if len(translation_results) == 1:
+                    current_text = f"{base_text.rstrip()}\n{translation_results[0][1]}\n\n"
+                else:
+                    formatted_translations = "\n".join(
+                        f"[{plugin_name}] {translated_text}"
+                        for plugin_name, translated_text in translation_results
+                    )
+                    current_text = f"{base_text.rstrip()}\n{formatted_translations}\n\n"
+            else:
+                current_text = base_text
+
+        for plugin in post_translation_plugins:
+            try:
+                result = plugin.process_text(current_text)
+                if result is None:
+                    return None
+                current_text = result
+            except Exception:
+                pass
+        
+        return current_text
+
+    def process_clipboard_text_through_plugins(self, text):
+        """Process text through active plugins for clipboard-safe output"""
+        if not PLUGINS_AVAILABLE:
+            return text
+
+        current_text = text
+
+        execution_order = [p for p in self.plugin_order if p in self.active_plugins]
+
         for plugin_filename in execution_order:
             if plugin_filename in self.plugins:
                 plugin = self.plugins[plugin_filename]
                 if plugin.enabled:
                     try:
-                        result = plugin.process_text(current_text)
+                        result = plugin.process_clipboard_text(current_text)
                         if result is None:
                             return None
                         current_text = result
                     except Exception:
                         pass
-        
+
         return current_text
     
     def reset_all_plugins(self):
@@ -856,6 +925,28 @@ class ModernTextractorGUI:
                 entry.pack(fill=tk.X)
                 setting_widgets[setting_name] = (var, None, value_type)
                 
+            elif value_type == 'secret':
+                var = tk.StringVar(value=current_value)
+                entry = ttk.Entry(setting_frame, textvariable=var, show='*')
+                entry.pack(fill=tk.X)
+                setting_widgets[setting_name] = (var, None, value_type)
+
+            elif value_type == 'multiline_str':
+                text_widget = tk.Text(
+                    setting_frame,
+                    height=10,
+                    wrap=tk.WORD,
+                    bg=self.colors['surface'],
+                    fg=self.colors['fg'],
+                    insertbackground=self.colors['fg'],
+                    relief=tk.FLAT,
+                    borderwidth=1
+                )
+                text_widget.pack(fill=tk.BOTH, expand=True)
+                if current_value:
+                    text_widget.insert('1.0', current_value)
+                setting_widgets[setting_name] = (text_widget, None, value_type)
+
             else:  # str
                 var = tk.StringVar(value=current_value)
                 entry = ttk.Entry(setting_frame, textvariable=var)
@@ -890,6 +981,10 @@ class ModernTextractorGUI:
                     if actual_value is not None:
                         plugin.set_setting(setting_name, actual_value)
                         self.plugin_settings[plugin_filename][setting_name] = actual_value
+                elif value_type == 'multiline_str':
+                    value = var.get('1.0', tk.END).rstrip('\n')
+                    plugin.set_setting(setting_name, value)
+                    self.plugin_settings[plugin_filename][setting_name] = value
                 else:
                     value = var.get()
                     plugin.set_setting(setting_name, value)
@@ -2693,9 +2788,7 @@ For more information, refer to the Textractor documentation.
                 if console_match:
                     # Process console output in background thread
                     text_to_process = f"[Console] {console_match.group(1)}\n"
-                    processed_text = self.process_text_through_plugins(text_to_process)
-                    if processed_text is not None:
-                        self.root.after(0, self.append_output, processed_text, False)
+                    self.root.after(0, self.append_output, text_to_process, True, False)
                     continue
                 
                 match = pattern.match(line)
@@ -2723,16 +2816,10 @@ For more information, refer to the Textractor documentation.
                     
                     if self.selected_hook_id and hook_id == self.selected_hook_id:
                         if text:
-                            # Process text through plugins in background thread
-                            processed_text = self.process_text_through_plugins(text + "\n")
-                            if processed_text is not None:
-                                self.root.after(0, self.append_output, processed_text, False, True)
+                            self.root.after(0, self.append_output, text + "\n", True, True)
                     elif not self.selected_hook_id and not self.silent_auto_launch:
                         # Only show hook preview if not in silent auto-launch mode
-                        # Process text through plugins in background thread
-                        processed_text = self.process_text_through_plugins(f"[Hook {hook_id}] {text}\n")
-                        if processed_text is not None:
-                            self.root.after(0, self.append_output, processed_text, False)
+                        self.root.after(0, self.append_output, f"[Hook {hook_id}] {text}\n", True, False)
                 
             except Exception:
                 break
@@ -2757,9 +2844,7 @@ For more information, refer to the Textractor documentation.
                 console_match = console_pattern.match(line)
                 if console_match:
                     text_to_process = f"[Console] {console_match.group(1)}\n"
-                    processed_text = self.process_text_through_plugins(text_to_process)
-                    if processed_text is not None:
-                        self.root.after(0, self.append_output, processed_text, False)
+                    self.root.after(0, self.append_output, text_to_process, True, False)
                     continue
                 
                 # Check for hook output
@@ -2793,14 +2878,10 @@ For more information, refer to the Textractor documentation.
                     
                     if self.selected_hook_id and hook_id == self.selected_hook_id:
                         if text:
-                            processed_text = self.process_text_through_plugins(text + "\n")
-                            if processed_text is not None:
-                                self.root.after(0, self.append_output, processed_text, False, True)
+                            self.root.after(0, self.append_output, text + "\n", True, True)
                     elif not self.selected_hook_id and not self.silent_auto_launch:
                         # Only show hook preview if not in silent auto-launch mode
-                        processed_text = self.process_text_through_plugins(f"[Hook #{hook_id}] {text}\n")
-                        if processed_text is not None:
-                            self.root.after(0, self.append_output, processed_text, False)
+                        self.root.after(0, self.append_output, f"[Hook #{hook_id}] {text}\n", True, False)
                 
             except Exception:
                 break
@@ -2869,7 +2950,7 @@ For more information, refer to the Textractor documentation.
             
             if hook_id in self.hooks and self.hooks[hook_id]['texts']:
                 for text in self.hooks[hook_id]['texts']:
-                    self.append_output(f"{text}\n")
+                    self.append_output(f"{text}\n", True, True)
                 self.append_output("\n" + "─" * 50 + "\n\n")
             
             # Save this hook selection to game profile
@@ -2883,25 +2964,34 @@ For more information, refer to the Textractor documentation.
         if process_plugins:
             # Process text through active plugins
             processed_text = self.process_text_through_plugins(text)
+            clipboard_text = self.process_clipboard_text_through_plugins(text)
         else:
             processed_text = text
+            clipboard_text = text
         
-        # If plugin filtered out the text, don't display it
         if processed_text is None:
-            return
+            pass
+        else:
+            # Use the processed text (which may have been modified by plugins)
+            self.output_text.config(state='normal')
+            self.output_text.insert(tk.END, processed_text)
+            self.output_text.see(tk.END)
+            self.output_text.config(state='disabled')
+            
+            # Update statistics
+            self.update_statistics(processed_text)
         
-        # Use the processed text (which may have been modified by plugins)
-        self.output_text.config(state='normal')
-        self.output_text.insert(tk.END, processed_text)
-        self.output_text.see(tk.END)
-        self.output_text.config(state='disabled')
-        
-        # Update statistics
-        self.update_statistics(processed_text)
-        
-        # Auto-copy only for extracted dialogue text explicitly marked as safe
-        if self.auto_copy_enabled.get() and allow_auto_copy:
-            self.auto_copy_text(processed_text)
+        # Auto-copy only for extracted dialogue text explicitly marked as safe.
+        # Clipboard uses a plugin-aware pipeline that keeps cleanup/filtering
+        # while skipping translation/display-only plugin output.
+        fallback_auto_copy = (
+            not allow_auto_copy
+            and self.auto_copy_enabled.get()
+            and clipboard_text is not None
+        )
+
+        if self.auto_copy_enabled.get() and (allow_auto_copy or fallback_auto_copy) and clipboard_text is not None:
+            self.auto_copy_text(clipboard_text)
     
     
     def auto_copy_text(self, text):
@@ -2910,11 +3000,16 @@ For more information, refer to the Textractor documentation.
             # Only copy non-empty, non-console text
             text_clean = text.strip()
             if text_clean and not text_clean.startswith('[Console]'):
+                print(f"[Clipboard] Copying text: {text_clean[:200]}", flush=True)
                 self.root.clipboard_clear()
                 self.root.clipboard_append(text_clean)
                 self.root.update()
+            else:
+                pass
         except Exception:
-            pass
+            import traceback
+            print("[Clipboard] Failed to copy text to clipboard.", flush=True)
+            traceback.print_exc()
     
     def copy_to_clipboard(self):
         """Copy all extracted text to clipboard"""

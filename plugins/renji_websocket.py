@@ -205,6 +205,10 @@ class RenjiWebSocketPlugin(TextractorPlugin):
         # Always return the text to continue the plugin chain
         return text
 
+    def process_clipboard_text(self, text: str) -> str:
+        """Keep clipboard processing free of Renji side effects."""
+        return text
+
     def get_settings(self) -> dict:
         """Return configurable settings for the plugin"""
         if not WEBSOCKET_AVAILABLE:

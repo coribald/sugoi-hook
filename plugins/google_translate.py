@@ -59,6 +59,7 @@ class GoogleTranslatePlugin(TextractorPlugin):
     description = "Translates text using Google Translate."
     version = "1.2"
     author = "Cline"
+    is_translation_plugin = True
 
     # Available languages for translation
     LANGUAGES = {
@@ -146,7 +147,7 @@ class GoogleTranslatePlugin(TextractorPlugin):
         if self.enabled and self.translator:
             try:
                 # Synchronous translation
-                translated = self.translator.translate(text)
+                translated = self.translate_text(text)
                 if translated:
                     # Ensure single newline between original and translation
                     # And add double newline at the end for spacing between blocks
@@ -155,6 +156,23 @@ class GoogleTranslatePlugin(TextractorPlugin):
                 pass
 
         return text
+
+    def process_clipboard_text(self, text: str) -> str:
+        """Keep clipboard text untranslated while other cleanup plugins run."""
+        return text
+
+    def translate_text(self, text: str) -> str | None:
+        if not self.enabled or not self.translator:
+            return None
+
+        try:
+            translated = self.translator.translate(text)
+            if translated:
+                return translated.strip()
+        except Exception:
+            return None
+
+        return None
 
     def get_settings(self) -> dict:
         """Return configurable settings for the plugin"""
