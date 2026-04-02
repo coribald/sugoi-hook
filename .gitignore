@@ -51,3 +51,6 @@ docs/
 plugins_config.json
 game_profiles.json
 overlay_config.json
+.nuitka-cache/
+.pip-cache/
+
