@@ -12,6 +12,7 @@ dist/
 venv/
 env/
 ENV/
+Python39/
 
 # IDE
 .vscode/

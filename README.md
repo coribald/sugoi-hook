@@ -91,6 +91,8 @@ pip install -r requirements.txt
 python SugoiHook_gui.py
 ```
 
+For a Windows Terminal debug launch from the repo checkout, use `run_debug.bat`.
+
 ## How to Use
 
 ### Basic Workflow
