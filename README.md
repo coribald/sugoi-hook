@@ -92,6 +92,7 @@ python SugoiHook_gui.py
 ```
 
 For a Windows Terminal debug launch from the repo checkout, use `run_debug.bat`.
+For a normal non-elevated launch from source, use `run_normal.bat`.
 
 ## How to Use
 
@@ -320,3 +321,4 @@ This project is licensed under the GPL-3.0 License - see the LICENSE file for de
 <div align="center">
   <b>Made with ❤️ by Team Sugoi Toolkit</b>
 </div>
+
