@@ -1,5 +1,8 @@
 import tkinter as tk
-from tkinter import font as tkfont
+try:
+    import tkinter.font as tkfont
+except ImportError:
+    tkfont = None
 from plugins import TextractorPlugin
 import sys
 import json
@@ -113,8 +116,8 @@ class OverlayWindowPlugin(TextractorPlugin):
         self.overlay.bind('<B1-Motion>', self.do_move)
         
         # Add a close button with configurable color
-        close_btn = tk.Label(self.overlay, text="×", bg=bg_color, 
-                            fg=self.config['close_btn_color'], 
+        close_btn = tk.Label(self.overlay, text="x", bg=bg_color,
+                            fg=self.config['close_btn_color'],
                             font=("Arial", 14, "bold"), cursor="hand2")
         close_btn.place(relx=1.0, x=-10, y=0, anchor="ne")
         close_btn.bind("<Button-1>", lambda e: self.overlay.withdraw())
@@ -138,31 +141,27 @@ class OverlayWindowPlugin(TextractorPlugin):
         self.text_widget.pack(fill=tk.BOTH, expand=True)
         
         # Configure tags for formatting with config values
-        # Original text tag
         original_font_style = (self.config['original_font'], self.config['original_font_size'])
-        self.text_widget.tag_config("original", 
-                                   foreground=self.config['original_color'], 
+        self.text_widget.tag_config("original",
+                                   foreground=self.config['original_color'],
                                    font=original_font_style)
         
-        # Translation text tag
         translation_font_style = [self.config['translation_font'], self.config['translation_font_size']]
         if self.config['translation_bold']:
             translation_font_style.append('bold')
-        self.text_widget.tag_config("translation", 
-                                   foreground=self.config['translation_color'], 
+        self.text_widget.tag_config("translation",
+                                   foreground=self.config['translation_color'],
                                    font=tuple(translation_font_style))
         
-        # Warning text tag
         warning_font_style = [self.config['warning_font'], self.config['warning_font_size']]
         if self.config['warning_italic']:
             warning_font_style.append('italic')
-        self.text_widget.tag_config("warning", 
-                                   foreground=self.config['warning_color'], 
+        self.text_widget.tag_config("warning",
+                                   foreground=self.config['warning_color'],
                                    font=tuple(warning_font_style))
 
-        # Add resize grip (bottom-right corner) with configurable color
-        resize_grip = tk.Label(self.overlay, text="◢", bg=bg_color, 
-                             fg=self.config['border_color'], 
+        resize_grip = tk.Label(self.overlay, text="◢", bg=bg_color,
+                             fg=self.config['border_color'],
                              font=("Arial", 10), cursor="size_nw_se")
         resize_grip.place(relx=1.0, rely=1.0, anchor="se")
         resize_grip.bind("<Button-1>", self.start_resize)
@@ -189,11 +188,11 @@ class OverlayWindowPlugin(TextractorPlugin):
         delta_x = event.x_root - self.drag_data["start_x"]
         delta_y = event.y_root - self.drag_data["start_y"]
         
-        new_width = max(self.config['min_width'], 
-                       min(self.config['max_width'], 
+        new_width = max(self.config['min_width'],
+                       min(self.config['max_width'],
                            self.drag_data["width"] + delta_x))
-        new_height = max(self.config['min_height'], 
-                        min(self.config['max_height'], 
+        new_height = max(self.config['min_height'],
+                        min(self.config['max_height'],
                             self.drag_data["height"] + delta_y))
         
         self.overlay.geometry(f"{new_width}x{new_height}")
@@ -203,24 +202,19 @@ class OverlayWindowPlugin(TextractorPlugin):
             return text
             
         is_translator_enabled = self._is_translation_plugin_enabled()
-
         display_text = text
         
-        # Update overlay
         if self.overlay:
             if self.overlay.state() == 'withdrawn':
                 self.overlay.after(0, self.overlay.deiconify)
-            
             self.overlay.after(0, lambda t=display_text, e=is_translator_enabled: self.update_text(t, e))
         
         return text
 
     def process_clipboard_text(self, text: str):
-        """Overlay is display-only and should not alter clipboard text."""
         return text
 
     def _is_translation_plugin_enabled(self) -> bool:
-        """Detect whether any translation plugin is currently enabled."""
         for module in list(sys.modules.values()):
             try:
                 plugin = getattr(module, 'plugin', None)
@@ -228,7 +222,6 @@ class OverlayWindowPlugin(TextractorPlugin):
                     return True
             except Exception:
                 pass
-
         return False
 
     def update_text(self, text, is_translator_enabled):
@@ -271,12 +264,19 @@ class OverlayWindowPlugin(TextractorPlugin):
             self.text_widget.config(state='disabled')
 
     def get_settings(self) -> dict:
-        """Return configurable settings for the plugin"""
-        # Get available fonts
-        available_fonts = sorted(list(tkfont.families()))
+        if tkfont is not None:
+            try:
+                available_fonts = sorted(list(tkfont.families()))
+            except Exception:
+                available_fonts = []
+        else:
+            available_fonts = []
+
+        if not available_fonts:
+            available_fonts = ['Segoe UI', 'Arial', 'Tahoma', 'MS Gothic']
+
         fonts_dict = {font: font for font in available_fonts}
         
-        # Color presets
         color_presets = {
             '#1e1e2e': 'Dark Blue (Catppuccin)',
             '#282828': 'Dark Gray (Gruvbox)',
@@ -306,154 +306,36 @@ class OverlayWindowPlugin(TextractorPlugin):
         }
         
         return {
-            # Window settings
-            'bg_color': (
-                self.config['bg_color'],
-                'color',
-                'Background Color',
-                color_presets
-            ),
-            'window_opacity': (
-                self.config['window_opacity'],
-                'int_slider',
-                'Window Opacity (%)',
-                {'min': 10, 'max': 100}
-            ),
-            'close_btn_color': (
-                self.config['close_btn_color'],
-                'color',
-                'Close Button Color',
-                color_presets
-            ),
-            'border_color': (
-                self.config['border_color'],
-                'color',
-                'Border/Grip Color',
-                color_presets
-            ),
-            
-            # Translation text settings
-            'translation_font': (
-                self.config['translation_font'],
-                'choice',
-                'Translation Font',
-                fonts_dict
-            ),
-            'translation_font_size': (
-                self.config['translation_font_size'],
-                'int_slider',
-                'Translation Font Size',
-                {'min': 8, 'max': 32}
-            ),
-            'translation_bold': (
-                self.config['translation_bold'],
-                'bool',
-                'Translation Bold',
-                None
-            ),
-            'translation_color': (
-                self.config['translation_color'],
-                'color',
-                'Translation Text Color',
-                color_presets
-            ),
-            
-            # Original text settings
-            'original_font': (
-                self.config['original_font'],
-                'choice',
-                'Original Text Font',
-                fonts_dict
-            ),
-            'original_font_size': (
-                self.config['original_font_size'],
-                'int_slider',
-                'Original Text Font Size',
-                {'min': 8, 'max': 32}
-            ),
-            'original_color': (
-                self.config['original_color'],
-                'color',
-                'Original Text Color',
-                color_presets
-            ),
-            
-            # Warning text settings
-            'warning_font': (
-                self.config['warning_font'],
-                'choice',
-                'Warning Font',
-                fonts_dict
-            ),
-            'warning_font_size': (
-                self.config['warning_font_size'],
-                'int_slider',
-                'Warning Font Size',
-                {'min': 8, 'max': 32}
-            ),
-            'warning_italic': (
-                self.config['warning_italic'],
-                'bool',
-                'Warning Italic',
-                None
-            ),
-            'warning_color': (
-                self.config['warning_color'],
-                'color',
-                'Warning Text Color',
-                color_presets
-            ),
-            
-            # Window size settings
-            'min_width': (
-                self.config['min_width'],
-                'int',
-                'Minimum Width (px)',
-                None
-            ),
-            'max_width': (
-                self.config['max_width'],
-                'int',
-                'Maximum Width (px)',
-                None
-            ),
-            'min_height': (
-                self.config['min_height'],
-                'int',
-                'Minimum Height (px)',
-                None
-            ),
-            'max_height': (
-                self.config['max_height'],
-                'int',
-                'Maximum Height (px)',
-                None
-            ),
-            'default_width': (
-                self.config['default_width'],
-                'int',
-                'Default Width (px)',
-                None
-            ),
-            'default_height': (
-                self.config['default_height'],
-                'int',
-                'Default Height (px)',
-                None
-            ),
+            'bg_color': (self.config['bg_color'], 'color', 'Background Color', color_presets),
+            'window_opacity': (self.config['window_opacity'], 'int_slider', 'Window Opacity (%)', {'min': 10, 'max': 100}),
+            'close_btn_color': (self.config['close_btn_color'], 'color', 'Close Button Color', color_presets),
+            'border_color': (self.config['border_color'], 'color', 'Border/Grip Color', color_presets),
+            'translation_font': (self.config['translation_font'], 'choice', 'Translation Font', fonts_dict),
+            'translation_font_size': (self.config['translation_font_size'], 'int_slider', 'Translation Font Size', {'min': 8, 'max': 32}),
+            'translation_bold': (self.config['translation_bold'], 'bool', 'Translation Bold', None),
+            'translation_color': (self.config['translation_color'], 'color', 'Translation Text Color', color_presets),
+            'original_font': (self.config['original_font'], 'choice', 'Original Text Font', fonts_dict),
+            'original_font_size': (self.config['original_font_size'], 'int_slider', 'Original Text Font Size', {'min': 8, 'max': 32}),
+            'original_color': (self.config['original_color'], 'color', 'Original Text Color', color_presets),
+            'warning_font': (self.config['warning_font'], 'choice', 'Warning Font', fonts_dict),
+            'warning_font_size': (self.config['warning_font_size'], 'int_slider', 'Warning Font Size', {'min': 8, 'max': 32}),
+            'warning_italic': (self.config['warning_italic'], 'bool', 'Warning Italic', None),
+            'warning_color': (self.config['warning_color'], 'color', 'Warning Text Color', color_presets),
+            'min_width': (self.config['min_width'], 'int', 'Minimum Width (px)', None),
+            'max_width': (self.config['max_width'], 'int', 'Maximum Width (px)', None),
+            'min_height': (self.config['min_height'], 'int', 'Minimum Height (px)', None),
+            'max_height': (self.config['max_height'], 'int', 'Maximum Height (px)', None),
+            'default_width': (self.config['default_width'], 'int', 'Default Width (px)', None),
+            'default_height': (self.config['default_height'], 'int', 'Default Height (px)', None),
         }
 
     def set_setting(self, name: str, value) -> bool:
-        """Update a plugin setting"""
         if name in self.config:
             self.config[name] = value
             self.save_config()
-            
-            # If overlay exists, recreate it to apply changes
             if self.overlay and self.enabled:
                 self.on_disable()
                 self.on_enable()
-            
             return True
         return False
 

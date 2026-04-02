@@ -1,13 +1,12 @@
 @echo off
 echo ========================================
-echo Building Single EXE with Nuitka (Fixed)
+echo Building Standalone Debug EXE
 echo ========================================
 echo.
 
 set "PIP_CACHE_DIR=%CD%\.pip-cache"
 set "NUITKA_CACHE_DIR=%CD%\.nuitka-cache"
 
-REM Check if Nuitka and onefile compression support are installed
 python -c "import nuitka, zstandard" 2>nul
 if errorlevel 1 (
     echo Nuitka and/or zstandard not found. Installing...
@@ -15,14 +14,11 @@ if errorlevel 1 (
     echo.
 )
 
-echo Starting Nuitka compilation...
-echo This creates a SINGLE EXE file with ALL runtime assets bundled
-echo May take 10-15 minutes on first run...
+echo Starting standalone debug build...
 echo.
 
-REM Build with Nuitka - Single file mode with raw runtime assets included
 python -m nuitka ^
-    --onefile ^
+    --mode=standalone ^
     --include-raw-dir=textractor_builds=textractor_builds ^
     --include-raw-dir=luna_builds=luna_builds ^
     --include-raw-dir=plugins=plugins ^
@@ -43,22 +39,20 @@ python -m nuitka ^
     --include-package=websocket_server ^
     --follow-imports ^
     --assume-yes-for-downloads ^
-    --windows-console-mode=disable ^
-    --force-stdout-spec={PROGRAM_BASE}.stdout.txt ^
-    --force-stderr-spec={PROGRAM_BASE}.stderr.txt ^
-    --output-dir=SugoiHook_builds ^
+    --windows-console-mode=attach ^
+    --output-dir=SugoiHook_debug_builds ^
     --company-name="Sugoi Toolkit Inc." ^
     --product-name="Sugoi Hook" ^
     --file-version=2.0.1 ^
     --product-version=2.0.1 ^
-    --file-description="Modern Hooking Interface" ^
-    --output-filename=SugoiHook.exe ^
+    --file-description="Modern Hooking Interface (Debug)" ^
+    --output-filename=SugoiHook_debug.exe ^
     SugoiHook_gui.py
 
 if errorlevel 1 (
     echo.
     echo ========================================
-    echo Build Failed!
+    echo Debug Build Failed!
     echo ========================================
     echo.
     pause
@@ -67,12 +61,12 @@ if errorlevel 1 (
 
 echo.
 echo ========================================
-echo Build Complete!
+echo Debug Build Complete!
 echo ========================================
 echo.
-echo Executable created: SugoiHook_builds\SugoiHook.exe
-echo.
+echo Executable created: SugoiHook_debug_builds\SugoiHook_debug.exe
 pause
+
 
 
 

@@ -16,7 +16,38 @@ import time
 import importlib.util
 import json
 import hashlib
+import logging
+import traceback
 from pathlib import Path
+
+ORIGINAL_STDOUT = sys.stdout
+ORIGINAL_STDERR = sys.stderr
+EARLY_LOG_STREAM = None
+EARLY_LOG_PATH = None
+
+
+def bootstrap_runtime_streams() -> Path | None:
+    global EARLY_LOG_STREAM, EARLY_LOG_PATH
+
+    try:
+        if getattr(sys, 'frozen', False) or getattr(sys, '__compiled__', False):
+            base_path = Path(sys.executable).resolve().parent
+        else:
+            base_path = Path(__file__).resolve().parent
+
+        EARLY_LOG_PATH = base_path / 'sugoihook-runtime.log'
+        EARLY_LOG_STREAM = open(EARLY_LOG_PATH, 'a', encoding='utf-8', buffering=1)
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+        EARLY_LOG_STREAM.write(f"\n===== Sugoi Hook bootstrap started {timestamp} =====\n")
+        sys.stdout = EARLY_LOG_STREAM
+        sys.stderr = EARLY_LOG_STREAM
+        return EARLY_LOG_PATH
+    except Exception:
+        return None
+
+
+bootstrap_runtime_streams()
+
 from PIL import Image, ImageTk, ImageDraw
 import win32gui
 import win32ui
@@ -52,6 +83,84 @@ AUTO_HOOK_MAX_RETRIES = 3
 PROCESS_MONITOR_DELAY = 3000
 GAME_LAUNCH_ATTACH_DELAY = 4000
 
+
+def get_runtime_base_path() -> Path:
+    if getattr(sys, 'frozen', False) or getattr(sys, '__compiled__', False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+class StreamTee:
+    def __init__(self, *streams):
+        self.streams = [stream for stream in streams if stream is not None]
+
+    def write(self, data):
+        for stream in self.streams:
+            try:
+                stream.write(data)
+                stream.flush()
+            except Exception:
+                pass
+        return len(data)
+
+    def flush(self):
+        for stream in self.streams:
+            try:
+                stream.flush()
+            except Exception:
+                pass
+
+    def isatty(self):
+        return False
+
+
+def setup_runtime_logging() -> Path | None:
+    try:
+        base_path = get_runtime_base_path()
+        log_path = base_path / 'sugoihook-runtime.log'
+        log_stream = open(log_path, 'a', encoding='utf-8', buffering=1)
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+        log_stream.write(f"\n===== Sugoi Hook session started {timestamp} =====\n")
+
+        original_stdout = ORIGINAL_STDOUT
+        original_stderr = ORIGINAL_STDERR
+        sys.stdout = StreamTee(original_stdout, log_stream)
+        sys.stderr = StreamTee(original_stderr, log_stream)
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s [%(levelname)s] %(message)s',
+            handlers=[logging.FileHandler(log_path, encoding='utf-8')],
+            force=True,
+        )
+
+        def log_uncaught_exception(exc_type, exc_value, exc_traceback):
+            if issubclass(exc_type, KeyboardInterrupt):
+                if original_stderr:
+                    original_stderr.write('KeyboardInterrupt\n')
+                    original_stderr.flush()
+                return
+            logging.critical(
+                'Uncaught exception',
+                exc_info=(exc_type, exc_value, exc_traceback),
+            )
+
+        sys.excepthook = log_uncaught_exception
+
+        if hasattr(threading, 'excepthook'):
+            def thread_exception_handler(args):
+                logging.critical(
+                    'Unhandled thread exception in %s',
+                    getattr(args.thread, 'name', 'unknown'),
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                )
+            threading.excepthook = thread_exception_handler
+
+        logging.info('Runtime logging initialized at %s', log_path)
+        return log_path
+    except Exception:
+        traceback.print_exc()
+        return None
 class ModernTextractorGUI:
     def __init__(self, root):
         self.root = root
@@ -302,8 +411,14 @@ class ModernTextractorGUI:
             current_files.add(plugin_file.name)
             
             try:
+                logging.info('Discovering plugin file: %s', plugin_file)
                 plugin = self.load_plugin(plugin_file)
                 # Apply saved settings to the plugin
+                if plugin:
+                    logging.info('Loaded plugin: %s (%s)', plugin_file.name, getattr(plugin, 'name', plugin_file.stem))
+                else:
+                    logging.warning('Plugin returned no instance: %s', plugin_file.name)
+
                 if plugin and plugin_file.name in self.plugin_settings:
                     for setting_name, setting_value in self.plugin_settings[plugin_file.name].items():
                         try:
@@ -405,6 +520,7 @@ class ModernTextractorGUI:
                 return plugin_instance
                 
         except Exception:
+            logging.exception('Failed to load plugin from %s', plugin_path)
             pass
         
         return None
@@ -3348,19 +3464,32 @@ For more information, refer to the Textractor documentation.
         self.root.destroy()
 
 def main():
+    log_path = setup_runtime_logging()
+    logging.info('Entered main%s', f' (log: {log_path})' if log_path else '')
+
     # Check if running as script and ensure admin rights
     # This enables the underlying CLI to attach to games running as admin
     is_frozen = getattr(sys, 'frozen', False)
-    is_nuitka = getattr(sys, '__compiled__', False) or (
-        sys.executable.lower().endswith('.exe') and 
-        'python' not in os.path.basename(sys.executable).lower()
-    )
-    is_compiled = is_frozen or is_nuitka
+    is_nuitka = bool(getattr(sys, '__compiled__', False))
+    launched_script_path = Path(sys.argv[0]).suffix.lower() if sys.argv else ''
+    is_script_launch = launched_script_path == '.py'
+    is_compiled = is_frozen or is_nuitka or not is_script_launch
     skip_elevation = os.environ.get("SUGOIHOOK_SKIP_ELEVATION") == "1"
+    logging.info(
+        'Startup flags: is_frozen=%s is_nuitka=%s is_compiled=%s is_script_launch=%s skip_elevation=%s executable=%s argv0=%s',
+        is_frozen,
+        is_nuitka,
+        is_compiled,
+        is_script_launch,
+        skip_elevation,
+        sys.executable,
+        sys.argv[0] if sys.argv else '',
+    )
     
-    if not is_compiled and not skip_elevation:
+    if is_script_launch and not skip_elevation:
         try:
             if not ctypes.windll.shell32.IsUserAnAdmin():
+                logging.info('Elevation required for script mode; relaunching with admin rights.')
                 # Re-run with admin rights
                 # Use subprocess.list2cmdline to properly quote arguments
                 params = subprocess.list2cmdline(sys.argv)
@@ -3375,21 +3504,48 @@ def main():
                 ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
                 sys.exit()
         except Exception:
-            # If elevation fails or is cancelled, continue as normal user
-            pass
+            logging.exception('Elevation attempt failed; continuing as normal user.')
 
     # Enable DPI awareness for crisp text
     try:
+        logging.info('Setting process DPI awareness.')
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        logging.info('DPI awareness set.')
     except Exception:
-        pass
+        logging.exception('Failed to set DPI awareness.')
 
+    logging.info('Creating Tk root window.')
     root = tk.Tk()
+    logging.info('Tk root window created.')
+
+    def report_callback_exception(exc_type, exc_value, exc_traceback):
+        logging.critical(
+            'Tkinter callback exception',
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+
+    root.report_callback_exception = report_callback_exception
+
+    logging.info('Constructing ModernTextractorGUI.')
     app = ModernTextractorGUI(root)
+    logging.info('ModernTextractorGUI constructed.')
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
+    logging.info('Entering Tk mainloop%s', f' (log: {log_path})' if log_path else '')
     root.mainloop()
+    logging.info('Tk mainloop exited.')
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        logging.critical('Fatal startup exception', exc_info=True)
+        raise
+
+
+
+
+
+
+
 
 

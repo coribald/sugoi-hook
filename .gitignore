@@ -53,4 +53,10 @@ game_profiles.json
 overlay_config.json
 .nuitka-cache/
 .pip-cache/
+sugoihook-runtime.log
+*.stdout.txt
+*.stderr.txt
+SugoiHook_debug_builds/
+game_context/
+nuitka-crash-report.xml
 
