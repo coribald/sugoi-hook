@@ -3356,8 +3356,9 @@ def main():
         'python' not in os.path.basename(sys.executable).lower()
     )
     is_compiled = is_frozen or is_nuitka
+    skip_elevation = os.environ.get("SUGOIHOOK_SKIP_ELEVATION") == "1"
     
-    if not is_compiled:
+    if not is_compiled and not skip_elevation:
         try:
             if not ctypes.windll.shell32.IsUserAnAdmin():
                 # Re-run with admin rights
@@ -3390,3 +3391,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
