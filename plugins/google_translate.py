@@ -4,6 +4,7 @@ from plugins import TextractorPlugin
 import sys
 import os
 from pathlib import Path
+from typing import Optional
 
 # Try to import GoogleTranslator from the Translator folder
 TRANSLATOR_AVAILABLE = False
@@ -161,7 +162,7 @@ class GoogleTranslatePlugin(TextractorPlugin):
         """Keep clipboard text untranslated while other cleanup plugins run."""
         return text
 
-    def translate_text(self, text: str) -> str | None:
+    def translate_text(self, text: str) -> Optional[str]:
         if not self.enabled or not self.translator:
             return None
 

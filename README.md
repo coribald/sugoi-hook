@@ -1,14 +1,24 @@
-# Sugoi Hook - Modern Text Extraction GUI
+# Sugoi Hook
 
-A beautiful and user-friendly GUI with **dual-engine support** for both **Textractor** and **Luna Hook**, designed for extracting text from games and applications in real-time.
+A Windows GUI for attaching to game processes, selecting text hooks, processing extracted text through plugins, and optionally translating or displaying it in an overlay.
 
-![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)
 
+## Recent Changes
+
+- Added a cleaner source-run workflow with `run_debug.*` and `run_normal.*` launchers.
+- Updated the build scripts to match the current repo layout and preserve runtime `*_config.json` files across clean builds.
+- Reworked the main UI layout: fixed header, better section collapsing, compact/full geometry restore, clearer hook/process flow, and split `Session Events` / `Session Output`.
+- Improved plugin management with explicit controls, better defaults, and a live preview in the Overlay Window settings.
+- Stabilized the text pipeline: shared pre-translation flow, clipboard alignment with translator input, safer Hook Concatenation behavior, and less aggressive duplicate filtering.
+- Expanded debugging and runtime logging, including console-visible pipeline tracing and full outbound OpenAI payload logging.
+- Added support for `gpt-4o` and `gpt-4o-mini` in the OpenAI translation plugin.
+
 ## Contact
 
-For any queries, support, or discussions, join the **Sugoi Toolkit Discord Server**:
+For support or discussion, join the **Sugoi Toolkit Discord Server**:
 
 🔗 [Join Sugoi Toolkit Server](https://discord.gg/XFbWSjMHJh)
 
@@ -16,309 +26,242 @@ For any queries, support, or discussions, join the **Sugoi Toolkit Discord Serve
 
 ## Features
 
-### Dual-Engine Support
-Sugoi Hook now supports **two powerful hooking engines** that you can switch between seamlessly:
+### Engine Support
 
-- **Luna Hook (Default)**: Advanced hooking engine with robust compatibility
-  - Excellent support for modern games and applications
-  - Enhanced text extraction capabilities
-  - Built on LunaTranslator's proven hooking technology
-  
-- **Textractor**: Classic and reliable hooking engine
-  - Wide compatibility with legacy applications
-  - Extensive hook code library
-  - Battle-tested text extraction
+Sugoi Hook supports two hooking engines:
 
-**Switch engines on-the-fly** using the toggle in the header - the GUI will automatically handle process detachment and re-attachment when switching engines.
+- **Luna Hook**
+  - good compatibility with many modern games
+  - default engine in the UI
+- **Textractor**
+  - classic hook workflow with broad compatibility
+  - useful fallback for titles that behave better on Textractor
 
-### Core Functionality
-- **Dual-Engine Support**: Choose between Luna Hook and Textractor engines
-- **Process Attachment**: Attach to any running process with intelligent filtering
-- **Hook Management**: Automatic hook discovery and manual hook code support
-- **Real-time Text Extraction**: Live text capture with statistics tracking
-- **Plugin System**: Extensible architecture for text processing and filtering
-- **Modern UI**: Beautiful dark-themed interface with DPI scaling support
+The engine selector lives in the fixed app header. Switching engines detaches the current session and reinitializes the hook flow.
 
-### Advanced Features
-- **Game Profiles**: Save hook configurations per game and auto-launch with saved settings
-- **Smart Process Filtering**: Automatically filters out system processes and bloatware
-- **Process Icons**: High-quality icon extraction for easy identification
-- **Manual Hook Codes**: Support for H-codes and R-codes with built-in syntax help
-- **Auto-copy**: Automatically copy extracted text to clipboard (enabled by default, copies non-console text only)
-- **System Tray**: Minimize to tray for background operation
-- **Statistics**: Track lines, words, characters, and extraction rate
-- **Export**: Save extracted text to file
+### Core Workflow
 
-### Plugin System
-Built-in plugins for text processing:
-- **Remove Empty Lines**: Filter out empty text
-- **Remove Special Characters**: Clean unwanted characters
-- **Remove Duplicates**: Eliminate duplicate text entries
-- **Minimum Length Filter**: Filter text by minimum length
-- **Fix Repeated Characters**: Fix repeated character patterns in text
-- **Hook Concatenation**: Combines text from multiple hooks into complete sentences. Essential when games split dialogue across hooks (e.g., character name in one hook and dialogue text in another, or first line in one hook and second line in a different hook). Intelligently merges sequential text from different hooks. For this to work effectively, ensure that NO hooks are selected and the hooks are ordered correctly in the configuration.
-- **Google Translate**: Real-time extracted text translation
-- **Translation Proxy**: Forward extracted text to Translator++ via HTTP proxy contributed by [Dream Savior on Patreon](https://www.patreon.com/cw/dreamsavior)
-- **Renji WebSocket**: 🎌 **NEW!** Send extracted Japanese text to [Renji](https://renji-xd.github.io/texthooker-ui/) for enhanced Japanese learning with character counting, reading statistics, and text history. Perfect for tracking your Japanese reading progress!
-- **Overlay Window**: Display extracted text as an overlay on screen. Fully configurable with options for font, font size, transparency, color, background, position, and more (optional)
+- attach to a running process
+- inspect discovered hooks or enter a manual hook
+- optionally combine hooks with Hook Concatenation
+- run text through a configurable plugin chain
+- view session events and session output separately
+- auto-copy cleaned untranslated text to the clipboard if desired
 
-**Plugin Features:**
-- **Drag & Drop Reordering**: Reorder plugins by dragging them in the list
-- **Persistent Order**: Plugin order and active states are saved and restored on restart
-- **Sequential Processing**: Text is processed through plugins in the order they appear
+### UI / Quality of Life
+
+- fixed header outside the scroll region
+- compact/expanded layout with remembered window geometry
+- collapsible sections for process, hook, plugins, events, and output
+- session status surfaced directly in the UI instead of only in logs
+- improved plugin configuration dialogs, including overlay style preview
+- system tray support
+
+### Built-in Plugins
+
+- **Hook Concatenation**
+  - combines speaker/dialogue style split hooks
+  - supports `dialogue_hook_id`, `prefix_hook_ids`, and a short timing window
+- **Remove Empty Lines**
+- **Remove Duplicates**
+  - filters immediate repeats instead of aggressively dropping broader matches
+- **Remove Special Characters**
+- **Minimum Length Filter**
+- **Fix Repeated Characters**
+- **Google Translate**
+- **OpenAI Translate**
+  - rolling original-line context
+  - story / character context and instruction fields
+  - support for `gpt-5-mini`, `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and `gpt-4.1-mini`
+- **Translation Proxy**
+  - forwards extracted text to Translator++
+- **Renji WebSocket**
+  - sends Japanese text to Renji for reading-tracker workflows
+- **Overlay Window**
+  - on-screen text overlay with configurable fonts, colors, opacity, and saved position/size
 
 ## Quick Start
 
 ### Prerequisites
+
 - Windows 10/11
-- Python 3.11 or higher (for running from source)
+- Python 3.9+ if running from source with your own interpreter
 
-### Installation
+This repo also includes a local `Python39` runtime used by the provided launch scripts.
 
-#### Option 1: Use Pre-built Executable (Recommended)
-Download the latest release from the [Releases](https://github.com/sugoi-toolkit-official/sugoi-hook/releases) page and run `SugoiHook.exe`.
+### Run From Source
 
-#### Option 2: Run from Source
-```bash
-# Clone the repository
+```powershell
 git clone https://github.com/sugoi-toolkit-official/sugoi-hook.git
 cd sugoi-hook
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the application
 python SugoiHook_gui.py
 ```
 
-For a Windows Terminal debug launch from the repo checkout, use `run_debug.bat`.
-For a normal non-elevated launch from source, use `run_normal.bat`.
+Helpful launchers in this repo:
 
-## How to Use
 
-### Basic Workflow
+- `run_debug.bat` / `run_debug.ps1`
+  - launches source mode in Windows Terminal for debugging / console visibility
+- `run_normal.bat` / `run_normal.ps1`
+  - launches source mode in the normal user context
 
-1. **Select a Process**
-   - Browse the process list or use the search bar
-   - Double-click a process to attach
-   - The GUI filters out system processes automatically
+### Build Executables
 
-2. **Choose a Hook**
-   - Wait for hooks to appear as you interact with the application
-   - Double-click a hook to select it
-   - Or use manual hook codes for advanced usage
+Release onefile build:
 
-3. **Extract Text**
-   - Text will appear in real-time in the output area
-   - Use plugins to filter and process the text
-   - Save or copy the extracted text as needed
-
-### Manual Hook Codes
-
-Sugoi Hook supports Textractor hook codes for advanced users:
-
-**H-Codes (Hook Codes)**
-```
-HB4@0                    # Hook at address 0, ANSI single char, offset 4
-HS-4@12345               # Hook at 0x12345, ANSI string, offset -4
-HQ@401000:user32.dll     # Hook in user32.dll, Unicode string
-```
-
-**R-Codes (Read Codes)**
-```
-RS@401000               # Read ANSI string at address
-RQ@401000               # Read Unicode string at address
-```
-
-Click the ❓ button in the GUI for complete syntax documentation.
-
-### Game Profiles
-
-Sugoi Hook automatically saves hook configurations for your games, making it easy to launch and play with a single click.
-
-1. **Automatic Profile Saving**
-   - When you attach to a game and select a hook, the configuration is automatically saved
-   - Profiles include hook type (auto/manual), hook data, function name, and engine used
-   - Each game is uniquely identified by its executable path and file size
-
-2. **Launch from Profile Manager**
-   - Click "💾 Game Profiles" to open the profile manager
-   - View all your saved game profiles with hook information and last used date
-   - Double-click a game or click "🚀 Launch Game" to auto-launch
-   - The game will start, attach automatically, and apply the saved hook
-
-3. **Browse and Launch Games**
-   - Click "📂 Browse for EXE" to manually select any executable file
-   - The GUI will launch it and auto-attach when the process starts
-   - Perfect for adding new games to your profile collection
-
-### Plugin Management
-
-1. **Activate/Deactivate Plugins**
-   - Double-click a plugin in the Plugins section to toggle it
-   - Right-click a plugin for quick access to activate/deactivate options
-   - Active plugins process text in the order they appear
-
-2. **Configure Plugin Settings**
-   - Right-click a plugin and select "⚙️ Configure" to access its settings
-   - Plugins can have configurable options like language selection, filtering rules, or display preferences
-   - Settings are automatically saved and restored when you restart the application
-   - Not all plugins have configurable settings - this option only appears for plugins that support it
-
-3. **Reorder Plugins**
-   - Drag and drop plugins in the list to change their execution order
-   - The first plugin in the list is applied first, then the next, and so on
-   - Plugin order is automatically saved and restored on restart
-
-4. **Add Custom Plugins**
-   - Click "📂 Open Folder" to access the plugins directory
-   - Create a new `.py` file following the plugin template
-   - Click "🔄 Refresh" to load new plugins
-
-5. **Plugin Development**
-   ```python
-   from plugins import TextractorPlugin
-
-   class MyPlugin(TextractorPlugin):
-       name = "My Custom Plugin"
-       description = "Does something cool"
-       version = "1.0"
-       
-       def process_text(self, text: str) -> str | None:
-           # Process and return text, or None to filter it out
-           return text.upper()
-       
-       def get_settings(self) -> dict:
-           # Optional: provide configurable settings
-           return {
-               'my_setting': (True, 'bool', 'Enable my feature')
-           }
-       
-       def set_setting(self, name: str, value) -> bool:
-           # Optional: handle setting changes
-           if name == 'my_setting':
-               self.my_setting = value
-               return True
-           return False
-   
-   plugin = MyPlugin()
-   ```
-
-### Keyboard Shortcuts
-
-- `F11` - Toggle fullscreen mode
-- `Escape` - Exit fullscreen mode
-- `Double-click` - Quick actions (attach to process, select hook, toggle plugin)
-
-## Architecture
-
-### Core Logic
-
-Sugoi Hook uses a multi-threaded architecture:
-
-1. **Main Thread**: Handles UI rendering and user interactions
-2. **CLI Process Thread**: Manages communication with TextractorCLI.exe
-3. **Output Reader Thread**: Reads and parses text from the CLI process
-4. **Plugin Processing**: Sequential text processing through active plugins
-
-### Text Flow
-```
-Application → TextractorCLI → Hook Detection → Text Extraction
-    ↓
-Plugin Chain (Filter/Transform) → UI Display → Auto-copy (optional)
-```
-
-### Process Filtering
-
-The application uses multiple heuristics to filter processes:
-- **System directories**: Excludes processes from Windows system folders
-- **Process patterns**: Filters known system processes and bloatware
-- **Window detection**: Only shows processes with visible windows
-- **PID filtering**: Excludes very low PIDs (system processes)
-
-## Technical Details
-
-### Dependencies
-- **tkinter**: GUI framework
-- **psutil**: Process management
-- **Pillow (PIL)**: Image processing for icons
-- **pywin32**: Windows API access
-- **pystray**: System tray support (optional)
-
-### File Structure
-```
-sugoi-hook/
-├── SugoiHook_gui.py              # Main application with dual-engine support
-├── plugins/                       # Plugin system
-│   ├── __init__.py               # Plugin base class
-│   ├── remove_empty.py           # Built-in plugins
-│   ├── remove_duplicates.py
-│   ├── remove_special_chars.py
-│   ├── min_length_filter.py
-│   ├── fix_repeated_chars.py
-│   ├── google_translate.py
-│   ├── translation_proxy.py      # External translation tool proxy
-│   └── overlay_window.py
-├── Translator/                    # Translation module
-│   └── deep_translator/          # Translation library
-├── textractor_builds/             # Textractor engine binaries
-│   ├── _x86/                     # 32-bit Textractor CLI
-│   └── _x64/                     # 64-bit Textractor CLI
-├── luna_builds/                   # Luna Hook engine binaries
-│   ├── LunaHostCLI32.exe         # 32-bit Luna Host CLI
-│   ├── LunaHostCLI64.exe         # 64-bit Luna Host CLI
-│   ├── LunaHook32.dll            # 32-bit Luna Hook library
-│   ├── LunaHook64.dll            # 64-bit Luna Hook library
-│   ├── LunaHost32.dll
-│   └── LunaHost64.dll
-├── logo.webp                      # Application icon
-├── requirements.txt               # Python dependencies
-└── README.md                      # This file
-```
-
-### Compilation
-
-To build an executable, simply run:
-```bash
+```powershell
 build.bat
 ```
 
-This will compile the application into a standalone executable using Nuitka.
+Debug standalone build:
+
+```powershell
+build_debug_standalone.bat
+```
+
+Current build behavior:
+
+- uses repo-local pip and Nuitka caches
+- includes the runtime asset folders used by the app
+- preserves runtime `*_config.json` files across clean builds
+
+## How to Use
+
+### Basic Flow
+
+1. **Select a process**
+   - choose a process from `Select Process`
+   - use the search box to narrow the list
+   - attach using the action button
+
+2. **Choose a hook source**
+   - inspect hooks in `Select Hook`
+   - select a discovered hook or enter a manual hook
+   - if Hook Concatenation is active, it can become the effective source instead of a single selected hook
+
+3. **Read the output**
+   - `Session Events` shows attach / hook / pipeline status
+   - `Session Output` shows the extracted / translated line flow
+
+4. **Tune plugins as needed**
+   - enable, disable, configure, and reorder plugins from the Plugins section
+
+### Hook Concatenation
+
+Hook Concatenation is designed for games where text is split across multiple hooks, commonly:
+
+- one hook for the speaker name
+- one hook for the dialogue text
+
+Current behavior supports:
+
+- `dialogue_hook_id`
+- `prefix_hook_ids`
+- `speaker_wait_ms`
+
+That lets the plugin briefly wait for a late-arriving speaker line without stalling forever when narration or monologue has no speaker hook at all.
+
+### Translation Plugins
+
+The app now uses a shared pre-translation pipeline so the translator input and clipboard input stay aligned.
+
+Important behavior:
+
+- translation plugins receive the cleaned untranslated line
+- clipboard gets that same untranslated translator input
+- rolling original-line context can be sent to OpenAI for continuity
+
+### Plugin Management
+
+Current plugin controls support:
+
+- toggle active state
+- open settings
+- move up / move down
+- drag reordering if preferred
+- refresh the plugin directory
+
+Many plugin settings are persisted through `plugins_config.json`.
+
+### Overlay Window
+
+The overlay plugin:
+
+- remembers its size and position
+- supports separate translation/original/warning fonts and colors
+- now includes a live preview in its settings dialog so style changes can be seen before saving
+
+## Runtime Files
+
+Useful local state files:
+
+- `plugins_config.json`
+  - plugin settings, active plugins, main window geometry
+- `overlay_config.json`
+  - overlay appearance and geometry
+- `game_profiles.json`
+  - saved game / hook profile data
+- `sugoihook-runtime.log`
+  - runtime log file
+
+## Logging and Debugging
+
+The app has expanded runtime tracing intended for source-mode debugging.
+
+Current traces include:
+
+- hook line arrival
+- pre-translation plugin results / drops
+- Hook Concatenation timing and emits
+- translation request / response logging
+- clipboard and final output decisions
+
+When OpenAI debug logging is enabled, the plugin prints the full outbound request payload to the console.
+
+## File Structure
+
+```text
+sugoi-hook/
+├── SugoiHook_gui.py
+├── plugins/
+├── textractor_builds/
+├── luna_builds/
+├── Translator/
+├── Python39/
+├── build.bat
+├── build_debug_standalone.bat
+├── run_debug.bat
+├── run_debug.ps1
+├── run_normal.bat
+├── run_normal.ps1
+├── plugins_config.json
+├── overlay_config.json
+├── game_profiles.json
+└── README.md
+```
 
 ## Acknowledgments
 
-Sugoi Hook is built on the foundation of powerful open-source text hooking technologies and community contributions. We are deeply grateful to the following projects and contributors:
+Sugoi Hook builds on several open-source projects and community contributions.
 
 ### Hooking Engines
 
 #### Textractor
-This project integrates [Textractor](https://github.com/Chenx221/Textractor), a modified version of the original Textractor by Artikash. **Textractor** is a powerful and battle-tested text hooking tool that enables real-time text extraction from games and applications.
+
+This project integrates [Textractor](https://github.com/Chenx221/Textractor), a modified version of the original Textractor by Artikash.
 
 - **Original Textractor**: [Artikash/Textractor](https://github.com/Artikash/Textractor)
 - **Modified Textractor**: [Chenx221/Textractor](https://github.com/Chenx221/Textractor)
 
 #### Luna Hook
-Sugoi Hook integrates **Luna Hook** (LunaHook.dll) for advanced text extraction capabilities. Luna Hook is sourced from the [LunaTranslator](https://github.com/HIllya51/LunaTranslator) project, an excellent translation tool with robust hooking technology.
 
-- **Luna Hook DLLs**: Sourced from [LunaTranslator](https://github.com/HIllya51/LunaTranslator/tree/main/src/) by HIllya51
-- **LunaHostCLI**: Custom CLI interface developed by **Team Sugoi Toolkit** to integrate Luna Hook with our GUI
+Sugoi Hook integrates Luna Hook assets sourced from the [LunaTranslator](https://github.com/HIllya51/LunaTranslator) project.
 
-### Development
-
-- **Sugoi Hook GUI**: Modern interface, dual-engine system, and plugin architecture developed by **Team Sugoi Toolkit**
-- **Plugin System**: Extensible architecture for community-driven text processing
-- **Dual-Engine Integration**: Seamless switching between Textractor and Luna Hook engines
+- **Luna Hook DLLs**: based on work from [LunaTranslator](https://github.com/HIllya51/LunaTranslator)
+- **LunaHostCLI**: CLI integration work by Team Sugoi Toolkit
 
 ## License
 
-This project is licensed under the GPL-3.0 License - see the LICENSE file for details.
+This project is licensed under the GPL-3.0 License. See `LICENSE` for details.
 
-
-**Note**: This tool is designed for legitimate purposes such as translation assistance and accessibility. Please respect software licenses and terms of service when using text extraction tools.
-
----
-
-<div align="center">
-  <b>Made with ❤️ by Team Sugoi Toolkit</b>
-</div>
-
+This tool is intended for legitimate translation-assistance and accessibility workflows. Please respect software licenses and terms of service when using text extraction tools.

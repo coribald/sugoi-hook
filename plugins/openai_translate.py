@@ -7,11 +7,22 @@ source-material context provided directly in the plugin settings UI.
 """
 
 import json
+import os
+import sys
 import time
+from collections import deque
 import requests
 from typing import Optional
 
 from plugins import TextractorPlugin
+
+
+def runtime_debug_logging_enabled() -> bool:
+    import os
+    import sys
+    env_enabled = os.environ.get('SUGOIHOOK_DEBUG_LOGGING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    argv_enabled = any(str(arg).strip().lower() == '--debug' for arg in sys.argv[1:])
+    return env_enabled or argv_enabled
 
 
 class OpenAITranslatePlugin(TextractorPlugin):
@@ -23,6 +34,8 @@ class OpenAITranslatePlugin(TextractorPlugin):
 
     MODELS = {
         "gpt-5-mini": "GPT-5 mini",
+        "gpt-4o": "GPT-4o",
+        "gpt-4o-mini": "GPT-4o mini",
         "gpt-4.1": "GPT-4.1",
         "gpt-4.1-mini": "GPT-4.1 mini",
     }
@@ -72,6 +85,8 @@ class OpenAITranslatePlugin(TextractorPlugin):
         self.verbosity = "low"
         self.timeout_seconds = 45
         self.max_output_tokens = 300
+        self.previous_context_lines = 3
+        self.recent_original_lines = deque(maxlen=6)
         self.session = None
         self.debug_logging = True
 
@@ -115,6 +130,7 @@ class OpenAITranslatePlugin(TextractorPlugin):
                 return text
 
         translated = self.translate_text(stripped_text)
+        self.remember_original_line(stripped_text)
         if not translated:
             return text
 
@@ -135,29 +151,36 @@ class OpenAITranslatePlugin(TextractorPlugin):
         if self.session is None:
             self.on_enable()
 
-        instructions = self.build_instructions()
+        recent_context = self.build_recent_context()
+        instructions = self.build_instructions(recent_context)
+        effective_verbosity = self.get_effective_verbosity()
         payload = {
             "model": self.model,
             "instructions": instructions,
             "input": text,
             "max_output_tokens": self.max_output_tokens,
-            "reasoning": {
-                "effort": self.reasoning_effort
-            },
             "text": {
                 "format": {
                     "type": "text"
                 },
-                "verbosity": self.verbosity
+                "verbosity": effective_verbosity
             },
         }
+        if self.model_supports_reasoning():
+            payload["reasoning"] = {
+                "effort": self.reasoning_effort
+            }
 
         try:
             self.log_payload(payload)
+            if self.debug_logging and runtime_debug_logging_enabled() and recent_context:
+                self.log_debug("Recent original context:")
+                print(json.dumps(recent_context, ensure_ascii=False, indent=2), flush=True)
             self.log_debug(
                 f"Sending request. model={self.model}, input_len={len(text)}, "
-                f"context_len={len(self.context_doc)}, max_output_tokens={self.max_output_tokens}, "
-                f"reasoning_effort={self.reasoning_effort}, verbosity={self.verbosity}"
+                f"context_len={len(self.context_doc)}, recent_context_lines={len(recent_context)}, "
+                f"max_output_tokens={self.max_output_tokens}, "
+                f"reasoning_effort={self.reasoning_effort}, verbosity={effective_verbosity}"
             )
             response = self.session.post(
                 "https://api.openai.com/v1/responses",
@@ -174,9 +197,13 @@ class OpenAITranslatePlugin(TextractorPlugin):
             self.log_response(data)
             output_text = self.extract_output_text(data)
             if output_text:
-                preview = output_text.strip().replace("\n", "\\n")
+                cleaned_output = output_text.strip()
+                if self.is_noop_translation(text, cleaned_output):
+                    self.log_debug("Model returned the source text unchanged; treating as no translation.")
+                    return None
+                preview = cleaned_output.replace("\n", "\\n")
                 self.log_debug(f"Translation OK: {preview[:200]}")
-                return output_text.strip()
+                return cleaned_output
             if data.get("status") == "incomplete":
                 incomplete_reason = data.get("incomplete_details", {}).get("reason")
                 self.log_debug(f"Response incomplete. reason={incomplete_reason}")
@@ -202,34 +229,20 @@ class OpenAITranslatePlugin(TextractorPlugin):
         return None
 
     def log_debug(self, message: str):
-        if not self.debug_logging:
+        if not self.debug_logging or not runtime_debug_logging_enabled():
             return
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         print(f"[OpenAI Translate][{timestamp}] {message}", flush=True)
 
     def log_payload(self, payload: dict):
-        if not self.debug_logging:
+        if not self.debug_logging or not runtime_debug_logging_enabled():
             return
 
-        safe_payload = dict(payload)
-        instructions = safe_payload.get("instructions", "")
-        input_text = safe_payload.get("input", "")
-
-        if isinstance(instructions, str):
-            single_line_instructions = " ".join(instructions.split())
-            if len(single_line_instructions) > 120:
-                safe_payload["instructions"] = single_line_instructions[:120] + "... [truncated]"
-            else:
-                safe_payload["instructions"] = single_line_instructions
-
-        if isinstance(input_text, str) and len(input_text) > 1000:
-            safe_payload["input"] = input_text[:1000] + "... [truncated]"
-
         self.log_debug("Outbound payload:")
-        print(json.dumps(safe_payload, ensure_ascii=False, indent=2), flush=True)
+        print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
 
     def log_response(self, data: dict):
-        if not self.debug_logging:
+        if not self.debug_logging or not runtime_debug_logging_enabled():
             return
 
         try:
@@ -294,13 +307,29 @@ class OpenAITranslatePlugin(TextractorPlugin):
 
         return True
 
-    def build_instructions(self) -> str:
+    def remember_original_line(self, text: str):
+        stripped = text.strip()
+        if not stripped:
+            return
+        self.recent_original_lines.append(stripped)
+
+    def build_recent_context(self) -> list[str]:
+        if self.previous_context_lines <= 0:
+            return []
+        recent_lines = list(self.recent_original_lines)
+        if not recent_lines:
+            return []
+        return recent_lines[-self.previous_context_lines:]
+
+    def build_instructions(self, recent_context: Optional[list[str]] = None) -> str:
         source_label = self.LANGUAGES.get(self.source_lang, self.source_lang)
         target_label = self.LANGUAGES.get(self.target_lang, self.target_lang)
 
         instruction_parts = [
             f"You are translating from {source_label} to {target_label}.",
-            "Return only the translated line with no commentary.",
+            "Return the English translation only. Do not include the original Japanese text.",
+            "Never echo or repeat the source line.",
+            "Output exactly one translated line in English.",
             self.extra_instructions.strip(),
         ]
 
@@ -308,7 +337,29 @@ class OpenAITranslatePlugin(TextractorPlugin):
             instruction_parts.append("Source material context:")
             instruction_parts.append(self.context_doc.strip())
 
+        if recent_context:
+            context_lines = [f"{idx}. {line}" for idx, line in enumerate(recent_context, start=1)]
+            instruction_parts.append("Recent original text context (use only to resolve tone, references, and continuity):")
+            instruction_parts.append("\n".join(context_lines))
+
         return "\n\n".join(part for part in instruction_parts if part)
+
+    def model_supports_reasoning(self) -> bool:
+        model_name = (self.model or "").lower()
+        return model_name.startswith("gpt-5")
+
+    def get_effective_verbosity(self) -> str:
+        model_name = (self.model or "").lower()
+        if model_name in {"gpt-4o", "gpt-4o-mini"} and self.verbosity == "low":
+            return "medium"
+        return self.verbosity
+
+    def is_noop_translation(self, source_text: str, translated_text: str) -> bool:
+        source_clean = source_text.strip()
+        translated_clean = translated_text.strip()
+        if not source_clean or not translated_clean:
+            return False
+        return source_clean == translated_clean
 
     def extract_output_text(self, data: dict) -> str:
         output_text = data.get("output_text")
@@ -387,6 +438,11 @@ class OpenAITranslatePlugin(TextractorPlugin):
                 "int",
                 "Max output tokens"
             ),
+            "previous_context_lines": (
+                self.previous_context_lines,
+                "int",
+                "Previous original lines to send as context (0-6)"
+            ),
             "debug_logging": (
                 self.debug_logging,
                 "bool",
@@ -447,6 +503,16 @@ class OpenAITranslatePlugin(TextractorPlugin):
                 return False
             return False
 
+        if name == "previous_context_lines":
+            try:
+                context_lines = int(value)
+                if 0 <= context_lines <= 6:
+                    self.previous_context_lines = context_lines
+                    return True
+            except (TypeError, ValueError):
+                return False
+            return False
+
         if name == "debug_logging":
             self.debug_logging = bool(value)
             return True
@@ -454,8 +520,8 @@ class OpenAITranslatePlugin(TextractorPlugin):
         return False
 
     def reset(self):
-        """No stateful runtime buffers to reset."""
-        pass
+        self.recent_original_lines.clear()
 
 
 plugin = OpenAITranslatePlugin()
+

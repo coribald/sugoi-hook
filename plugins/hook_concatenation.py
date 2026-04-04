@@ -3,200 +3,299 @@ Hook Concatenation Plugin
 ==========================
 
 Concatenates output from multiple selected hooks into a single output.
-Users can select which hooks to monitor and the order in which to display their output.
+Supports a required dialogue hook plus optional prefix hooks such as speaker names.
 """
 
 from plugins import TextractorPlugin
+
+
+def runtime_debug_logging_enabled() -> bool:
+    import os
+    import sys
+    env_enabled = os.environ.get('SUGOIHOOK_DEBUG_LOGGING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    argv_enabled = any(str(arg).strip().lower() == '--debug' for arg in sys.argv[1:])
+    return env_enabled or argv_enabled
 from typing import Optional
+import logging
+import os
+import sys
 import re
 
 
 class HookConcatenationPlugin(TextractorPlugin):
-    """
-    Concatenates text from multiple hooks into a single ordered output.
-    
-    This plugin:
-    - Allows selecting multiple hook IDs to monitor
-    - Buffers text from each selected hook
-    - Outputs concatenated text in the user-specified order
-    """
-    
+    def _log_debug(self, stage: str, **fields):
+        if not runtime_debug_logging_enabled():
+            return
+        try:
+            parts = []
+            for key, value in fields.items():
+                value_str = str(value).replace("\r", "\\r").replace("\n", "\\n")
+                if len(value_str) > 160:
+                    value_str = value_str[:160] + "..."
+                parts.append(f"{key}={value_str}")
+            message = f"[HOOK CONCAT] {stage}"
+            if parts:
+                message += " | " + " | ".join(parts)
+            logging.info(message)
+            try:
+                print(message, flush=True)
+            except Exception:
+                pass
+        except Exception:
+            pass
     name = "Hook Concatenation"
-    description = "Concatenate output from multiple hooks in specified order"
-    version = "1.0"
+    description = "Concatenate output from multiple hooks with optional delayed prefixes"
+    version = "1.1"
     author = "Sugoi Hook"
-    
+
     def __init__(self):
         super().__init__()
-        # Settings
-        self._state['enabled_mode'] = False  # Whether concatenation mode is active
-        self._state['num_hooks'] = 2  # Number of hooks to concatenate
-        self._state['hook_ids'] = ""  # Comma-separated hook IDs in order (e.g., "1,3,2")
-        
-        # Runtime state
-        self._state['hook_buffers'] = {}  # Store latest text for each hook: {hook_id: text}
+        self._state['enabled_mode'] = False
+        self._state['num_hooks'] = 2
+        self._state['hook_ids'] = ""
+        self._state['dialogue_hook_id'] = ""
+        self._state['prefix_hook_ids'] = ""
+        self._state['speaker_wait_ms'] = 150
+        self._state['hook_buffers'] = {}
         self._state['clipboard_hook_buffers'] = {}
-        
-        # Pattern to match hook output format: [Hook X] text or [Hook #X] text
+        self._state['pending_dialogue'] = None
+        self._state['pending_timer_id'] = None
         self._hook_pattern = re.compile(r'^\[Hook #?(\d+)\]\s*(.*)$', re.IGNORECASE)
-    
+
     def process_text(self, text: str) -> Optional[str]:
-        """
-        Process incoming text and handle hook concatenation.
-        
-        Args:
-            text: The text to process
-            
-        Returns:
-            - Concatenated output from all configured hooks if in concatenation mode
-            - Original text if concatenation mode is disabled
-            - None to filter out individual hook outputs when concatenation is active
-        """
-        # If concatenation mode is not enabled, pass through unchanged
         if not self._state['enabled_mode']:
             return text
-        
-        # Parse hook IDs from settings
-        hook_ids = self._parse_hook_ids()
-        if not hook_ids:
-            # No valid hooks configured, pass through
+
+        config = self._get_concat_config()
+        if not config['all_hook_ids']:
             return text
-        
-        # Check if this text is from a hook
+
         text_stripped = text.strip()
-        
-        # Check if it's a console message - always pass through
         if text_stripped.startswith('[Console]'):
             return text
-        
-        # Check for hook output format: [Hook X] text or [Hook #X] text
+
         match = self._hook_pattern.match(text_stripped)
-        
-        if match:
-            # Extract hook ID and actual text
-            hook_id = match.group(1)
-            hook_text = match.group(2).strip()
-            
-            # Only track if this hook is in our configured list
-            if hook_id in hook_ids:
-                # If this hook already has text in buffer, it means a new dialogue cycle started
-                # Clear all buffers to start fresh
-                if hook_id in self._state['hook_buffers']:
-                    self._state['hook_buffers'] = {}
-                
-                # Store this hook's text
-                if hook_text:  # Only store non-empty text
-                    self._state['hook_buffers'][hook_id] = hook_text
-                
-                # Output concatenation of whatever hooks are currently in the buffer
-                concatenated = self._build_concatenated_output(hook_ids)
-                
-                if concatenated:
-                    return concatenated
-                
-                # No content to output
-                return None
-            else:
-                # This hook is NOT in our configured list - filter it out completely
-                return None
-        else:
-            # Not a hook output format
-            # For safety, pass through any text that doesn't match our pattern
+        if not match:
             return text
+
+        hook_id = match.group(1)
+        hook_text = match.group(2).strip()
+
+        if hook_id not in config['all_hook_ids']:
+            self._log_debug('drop_unconfigured_hook', hook_id=hook_id, text=hook_text)
+            return None
+
+        if hook_id in self._state['hook_buffers'] and hook_id == config['dialogue_hook_id']:
+            self._flush_pending_dialogue()
+            self._state['hook_buffers'] = {}
+
+        if hook_text:
+            self._state['hook_buffers'][hook_id] = hook_text
+
+        if hook_id in config['prefix_hook_ids']:
+            self._log_debug('prefix_received', hook_id=hook_id, text=hook_text, pending_dialogue=self._state.get('pending_dialogue'))
+            if self._state['pending_dialogue']:
+                if self._all_prefixes_ready(config):
+                    self._cancel_pending_timer()
+                    self._log_debug('emit_on_prefix_ready', hook_id=hook_id)
+                    return self._emit_pending_dialogue_now()
+                self._log_debug('prefix_waiting_for_more', hook_id=hook_id, configured_prefixes=config['prefix_hook_ids'], buffered=list(self._state['hook_buffers'].keys()))
+                return None
+
+            wait_ms = max(0, int(config['speaker_wait_ms']))
+            if wait_ms == 0:
+                self._log_debug('emit_prefix_no_wait', hook_id=hook_id)
+                return self._emit_pending_dialogue_now()
+
+            self._log_debug('schedule_prefix_only_emit', hook_id=hook_id, wait_ms=wait_ms, buffered=list(self._state['hook_buffers'].keys()))
+            self._schedule_pending_emit(wait_ms)
+            return None
+
+        if hook_id == config['dialogue_hook_id']:
+            self._state['pending_dialogue'] = hook_text
+            self._log_debug('dialogue_received', hook_id=hook_id, text=hook_text, buffered=list(self._state['hook_buffers'].keys()))
+            if not hook_text:
+                self._log_debug('drop_empty_dialogue', hook_id=hook_id)
+                return None
+
+            if not config['prefix_hook_ids']:
+                self._log_debug('emit_dialogue_without_prefixes', hook_id=hook_id)
+                return self._emit_pending_dialogue_now()
+
+            if self._all_prefixes_ready(config):
+                self._log_debug('emit_dialogue_with_ready_prefixes', hook_id=hook_id)
+                return self._emit_pending_dialogue_now()
+
+            wait_ms = max(0, int(config['speaker_wait_ms']))
+            if wait_ms == 0:
+                self._log_debug('emit_dialogue_no_wait', hook_id=hook_id)
+                return self._emit_pending_dialogue_now()
+
+            self._log_debug('schedule_pending_emit', hook_id=hook_id, wait_ms=wait_ms, expected_prefixes=config['prefix_hook_ids'])
+            self._schedule_pending_emit(wait_ms)
+            return None
+
+        return None
 
     def process_clipboard_text(self, text: str) -> Optional[str]:
-        """
-        Apply hook concatenation to clipboard output with independent buffers so
-        the display pipeline doesn't consume clipboard state.
-        """
         if not self._state['enabled_mode']:
             return text
 
-        hook_ids = self._parse_hook_ids()
-        if not hook_ids:
+        config = self._get_concat_config()
+        if not config['all_hook_ids']:
             return text
 
         text_stripped = text.strip()
-
         if text_stripped.startswith('[Console]'):
             return text
 
         match = self._hook_pattern.match(text_stripped)
+        if not match:
+            return text
 
-        if match:
-            hook_id = match.group(1)
-            hook_text = match.group(2).strip()
+        hook_id = match.group(1)
+        hook_text = match.group(2).strip()
 
-            if hook_id in hook_ids:
-                if hook_id in self._state['clipboard_hook_buffers']:
-                    self._state['clipboard_hook_buffers'] = {}
+        if hook_id not in config['all_hook_ids']:
+            return None
 
-                if hook_text:
-                    self._state['clipboard_hook_buffers'][hook_id] = hook_text
+        if hook_id in self._state['clipboard_hook_buffers'] and hook_id == config['dialogue_hook_id']:
+            self._state['clipboard_hook_buffers'] = {}
 
-                concatenated = self._build_concatenated_output(
-                    hook_ids,
-                    buffer_key='clipboard_hook_buffers'
-                )
+        if hook_text:
+            self._state['clipboard_hook_buffers'][hook_id] = hook_text
 
-                if concatenated:
-                    return concatenated
+        if hook_id in config['prefix_hook_ids']:
+            return None
 
-                return None
-            else:
-                return None
+        if hook_id == config['dialogue_hook_id']:
+            output_parts = []
+            for prefix_hook_id in config['prefix_hook_ids']:
+                prefix_text = self._state['clipboard_hook_buffers'].get(prefix_hook_id, '').strip()
+                if prefix_text:
+                    output_parts.append(prefix_text)
+            if hook_text:
+                output_parts.append(hook_text)
+            if output_parts:
+                combined_output = self._normalize_combined_output_order(''.join(output_parts))
+                return combined_output + '\n'
+            return None
 
-        return text
-    
+        return None
+
+    def _get_concat_config(self):
+        dialogue_hook_id = str(self._state.get('dialogue_hook_id', '')).strip()
+        prefix_hook_ids = [hook_id.strip() for hook_id in str(self._state.get('prefix_hook_ids', '')).split(',') if hook_id.strip().isdigit()]
+
+        if not dialogue_hook_id:
+            legacy_hook_ids = self._parse_hook_ids()
+            if legacy_hook_ids:
+                dialogue_hook_id = legacy_hook_ids[-1]
+                prefix_hook_ids = legacy_hook_ids[:-1]
+
+        all_hook_ids = []
+        for hook_id in prefix_hook_ids + ([dialogue_hook_id] if dialogue_hook_id else []):
+            if hook_id and hook_id not in all_hook_ids:
+                all_hook_ids.append(hook_id)
+
+        return {
+            'dialogue_hook_id': dialogue_hook_id,
+            'prefix_hook_ids': prefix_hook_ids,
+            'all_hook_ids': all_hook_ids,
+            'speaker_wait_ms': self._state.get('speaker_wait_ms', 150),
+        }
+
     def _parse_hook_ids(self) -> list:
-        """Parse hook IDs from the settings string."""
         hook_ids_str = self._state['hook_ids'].strip()
         if not hook_ids_str:
             return []
-        
-        # Split by comma and clean up
         hook_ids = []
         for hook_id in hook_ids_str.split(','):
             hook_id = hook_id.strip()
             if hook_id.isdigit():
                 hook_ids.append(hook_id)
-        
         return hook_ids
-    
-    def _build_concatenated_output(self, hook_ids: list, buffer_key: str = 'hook_buffers') -> str:
-        """Build concatenated output from buffers in the specified order."""
+
+    def _all_prefixes_ready(self, config) -> bool:
+        if not config['prefix_hook_ids']:
+            return True
+        return all(prefix_hook_id in self._state['hook_buffers'] for prefix_hook_id in config['prefix_hook_ids'])
+
+    def _normalize_combined_output_order(self, text: str) -> str:
+        stripped = text.strip()
+        # Defensive fix: if we somehow get quoted dialogue followed by a short speaker label,
+        # move the label back in front where VN hook concatenation expects it.
+        trailing_label_match = re.match(r'^(「.+?」)([^「」\s]{1,24})$', stripped)
+        if trailing_label_match:
+            dialogue_text, trailing_label = trailing_label_match.groups()
+            return f"{trailing_label}{dialogue_text}"
+        return stripped
+
+    def _build_pending_output(self) -> str:
+        config = self._get_concat_config()
         output_parts = []
-        hook_buffers = self._state.get(buffer_key, {})
-        
-        for hook_id in hook_ids:
-            if hook_id in hook_buffers:
-                hook_text = hook_buffers[hook_id]
-                if hook_text:  # Only include non-empty text
-                    output_parts.append(hook_text)
-        
+        for prefix_hook_id in config['prefix_hook_ids']:
+            prefix_text = self._state['hook_buffers'].get(prefix_hook_id, '').strip()
+            if prefix_text:
+                output_parts.append(prefix_text)
+        dialogue_text = (self._state.get('pending_dialogue') or '').strip()
+        if dialogue_text:
+            output_parts.append(dialogue_text)
         if not output_parts:
             return ""
-        
-        # Join directly without separators to form a single continuous sentence
-        # This allows Google Translate and other plugins to process it as one complete text
-        concatenated = "".join(output_parts) + "\n"
-        return concatenated
-    
+        return self._normalize_combined_output_order(''.join(output_parts)) + '\n'
+
+    def _emit_pending_dialogue_now(self) -> Optional[str]:
+        self._cancel_pending_timer()
+        output_text = self._build_pending_output()
+        self._log_debug('emit_pending_dialogue', output=output_text, buffered=list(self._state['hook_buffers'].keys()))
+        self._state['pending_dialogue'] = None
+        self._state['hook_buffers'] = {}
+        return output_text or None
+
+    def _flush_pending_dialogue(self):
+        self._log_debug('flush_pending_dialogue')
+        output_text = self._emit_pending_dialogue_now()
+        if not output_text:
+            return
+        app = getattr(self, 'app', None)
+        if not app:
+            return
+        try:
+            app.run_on_ui_thread(app.append_output, output_text, True, False)
+        except Exception:
+            pass
+
+    def _schedule_pending_emit(self, wait_ms: int):
+        self._cancel_pending_timer()
+        app = getattr(self, 'app', None)
+        if not app or not hasattr(app, 'root'):
+            return
+        self._state['pending_timer_id'] = app.root.after(wait_ms, self._flush_pending_dialogue)
+
+    def _cancel_pending_timer(self):
+        timer_id = self._state.get('pending_timer_id')
+        app = getattr(self, 'app', None)
+        if timer_id and app and hasattr(app, 'root'):
+            try:
+                app.root.after_cancel(timer_id)
+            except Exception:
+                pass
+        self._state['pending_timer_id'] = None
+
     def reset(self):
-        """Reset the plugin state."""
+        self._cancel_pending_timer()
         self._state['hook_buffers'] = {}
         self._state['clipboard_hook_buffers'] = {}
-    
+        self._state['pending_dialogue'] = None
+
     def on_enable(self):
-        """Called when plugin is enabled."""
         self.reset()
-    
+
     def on_disable(self):
-        """Called when plugin is disabled."""
         self.reset()
-    
+
     def get_settings(self) -> dict:
-        """Get plugin settings for configuration."""
         return {
             'enabled_mode': (
                 self._state['enabled_mode'],
@@ -206,27 +305,41 @@ class HookConcatenationPlugin(TextractorPlugin):
             'num_hooks': (
                 self._state['num_hooks'],
                 'int_slider',
-                'Number of hooks to concatenate',
+                'Legacy number of hooks setting (kept for compatibility)',
                 {'min': 2, 'max': 10}
             ),
             'hook_ids': (
                 self._state['hook_ids'],
                 'str',
-                'Hook IDs (comma-separated, e.g., 1,3,2)\nOrder determines output order.\nIMPORTANT: Do NOT select any hook - leave all unselected!'
+                'Legacy hook order (fallback only). If dialogue/prefix hooks are set, those take priority.'
+            ),
+            'dialogue_hook_id': (
+                self._state['dialogue_hook_id'],
+                'str',
+                'Required dialogue hook ID (for example 2)'
+            ),
+            'prefix_hook_ids': (
+                self._state['prefix_hook_ids'],
+                'str',
+                'Optional prefix hook IDs in order (for example 1 or 5,1)'
+            ),
+            'speaker_wait_ms': (
+                self._state['speaker_wait_ms'],
+                'int_slider',
+                'How long to wait for optional prefix hooks before emitting dialogue only',
+                {'min': 0, 'max': 500}
             )
         }
-    
+
     def set_setting(self, name: str, value) -> bool:
-        """Set a plugin setting."""
         if name == 'enabled_mode':
             try:
                 self._state['enabled_mode'] = bool(value)
-                if self._state['enabled_mode']:
-                    self.reset()  # Clear buffers when enabling
+                self.reset()
                 return True
             except (ValueError, TypeError):
                 return False
-        
+
         elif name == 'num_hooks':
             try:
                 num_hooks = int(value)
@@ -236,25 +349,33 @@ class HookConcatenationPlugin(TextractorPlugin):
                 return False
             except (ValueError, TypeError):
                 return False
-        
-        elif name == 'hook_ids':
+
+        elif name in ('hook_ids', 'dialogue_hook_id', 'prefix_hook_ids'):
             try:
-                # Validate that hook_ids is a comma-separated list of numbers
                 hook_ids_str = str(value).strip()
                 if hook_ids_str:
-                    # Validate format
                     parts = [p.strip() for p in hook_ids_str.split(',')]
                     for part in parts:
-                        if not part.isdigit():
+                        if part and not part.isdigit():
                             return False
-                self._state['hook_ids'] = hook_ids_str
-                self.reset()  # Clear buffers when changing hook IDs
+                self._state[name] = hook_ids_str
+                self.reset()
                 return True
             except (ValueError, TypeError):
                 return False
-        
+
+        elif name == 'speaker_wait_ms':
+            try:
+                wait_ms = int(value)
+                if 0 <= wait_ms <= 500:
+                    self._state['speaker_wait_ms'] = wait_ms
+                    self.reset()
+                    return True
+                return False
+            except (ValueError, TypeError):
+                return False
+
         return False
 
 
-# Plugin instance for discovery
 plugin = HookConcatenationPlugin()
