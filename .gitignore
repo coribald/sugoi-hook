@@ -59,4 +59,9 @@ sugoihook-runtime.log
 SugoiHook_debug_builds/
 game_context/
 nuitka-crash-report.xml
+# Local shortcuts
+/*.lnk
+# Local runtime engine binaries
+/luna_builds/
+/textractor_builds/
 
