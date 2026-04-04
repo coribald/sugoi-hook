@@ -24,6 +24,10 @@ ORIGINAL_STDOUT = sys.stdout
 ORIGINAL_STDERR = sys.stderr
 EARLY_LOG_STREAM = None
 EARLY_LOG_PATH = None
+def runtime_debug_logging_enabled() -> bool:
+    env_enabled = os.environ.get('SUGOIHOOK_DEBUG_LOGGING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    argv_enabled = any(str(arg).strip().lower() == '--debug' for arg in sys.argv[1:])
+    return env_enabled or argv_enabled
 
 
 def bootstrap_runtime_streams():
@@ -259,7 +263,7 @@ class ModernTextractorGUI:
         self.window_geometry = None
         self.compact_window_geometry = None
         self.window_geometry_after_id = None
-        self.pipeline_debug_enabled = True
+        self.pipeline_debug_enabled = runtime_debug_logging_enabled()
         
         # System tray
         self.tray_icon = None
@@ -432,11 +436,13 @@ class ModernTextractorGUI:
             current_files.add(plugin_file.name)
             
             try:
-                logging.info('Discovering plugin file: %s', plugin_file)
+                if runtime_debug_logging_enabled():
+                    logging.info('Discovering plugin file: %s', plugin_file)
                 plugin = self.load_plugin(plugin_file)
                 # Apply saved settings to the plugin
                 if plugin:
-                    logging.info('Loaded plugin: %s (%s)', plugin_file.name, getattr(plugin, 'name', plugin_file.stem))
+                    if runtime_debug_logging_enabled():
+                        logging.info('Loaded plugin: %s (%s)', plugin_file.name, getattr(plugin, 'name', plugin_file.stem))
                 else:
                     logging.warning('Plugin returned no instance: %s', plugin_file.name)
 
@@ -3977,7 +3983,8 @@ For more information, refer to the Textractor documentation.
             text_clean = text.strip()
             if text_clean and not text_clean.startswith('[Console]'):
                 self.log_pipeline('clipboard.copy', text=text_clean)
-                print(f"[Clipboard] Copying text: {text_clean[:200]}", flush=True)
+                if runtime_debug_logging_enabled():
+                    print(f"[Clipboard] Copying text: {text_clean[:200]}", flush=True)
                 self.root.clipboard_clear()
                 self.root.clipboard_append(text_clean)
                 self.root.update()
@@ -3985,7 +3992,8 @@ For more information, refer to the Textractor documentation.
                 self.log_pipeline('clipboard.skip', text=text_clean)
         except Exception:
             import traceback
-            print("[Clipboard] Failed to copy text to clipboard.", flush=True)
+            if runtime_debug_logging_enabled():
+                print("[Clipboard] Failed to copy text to clipboard.", flush=True)
             traceback.print_exc()
     
     def copy_to_clipboard(self):
@@ -4350,6 +4358,7 @@ For more information, refer to the Textractor documentation.
 def main():
     log_path = setup_runtime_logging()
     logging.info('Entered main%s', f' (log: {log_path})' if log_path else '')
+    logging.info('Verbose runtime debug logging: %s', 'enabled' if runtime_debug_logging_enabled() else 'disabled')
 
     # Source and packaged launches now stay in the current user context.
     is_frozen = getattr(sys, 'frozen', False)

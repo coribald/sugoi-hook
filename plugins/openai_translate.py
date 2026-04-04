@@ -7,12 +7,22 @@ source-material context provided directly in the plugin settings UI.
 """
 
 import json
+import os
+import sys
 import time
 from collections import deque
 import requests
 from typing import Optional
 
 from plugins import TextractorPlugin
+
+
+def runtime_debug_logging_enabled() -> bool:
+    import os
+    import sys
+    env_enabled = os.environ.get('SUGOIHOOK_DEBUG_LOGGING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    argv_enabled = any(str(arg).strip().lower() == '--debug' for arg in sys.argv[1:])
+    return env_enabled or argv_enabled
 
 
 class OpenAITranslatePlugin(TextractorPlugin):
@@ -163,7 +173,7 @@ class OpenAITranslatePlugin(TextractorPlugin):
 
         try:
             self.log_payload(payload)
-            if self.debug_logging and recent_context:
+            if self.debug_logging and runtime_debug_logging_enabled() and recent_context:
                 self.log_debug("Recent original context:")
                 print(json.dumps(recent_context, ensure_ascii=False, indent=2), flush=True)
             self.log_debug(
@@ -219,20 +229,20 @@ class OpenAITranslatePlugin(TextractorPlugin):
         return None
 
     def log_debug(self, message: str):
-        if not self.debug_logging:
+        if not self.debug_logging or not runtime_debug_logging_enabled():
             return
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         print(f"[OpenAI Translate][{timestamp}] {message}", flush=True)
 
     def log_payload(self, payload: dict):
-        if not self.debug_logging:
+        if not self.debug_logging or not runtime_debug_logging_enabled():
             return
 
         self.log_debug("Outbound payload:")
         print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
 
     def log_response(self, data: dict):
-        if not self.debug_logging:
+        if not self.debug_logging or not runtime_debug_logging_enabled():
             return
 
         try:

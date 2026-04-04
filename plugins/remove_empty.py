@@ -6,12 +6,24 @@ Filters out empty or whitespace-only text.
 """
 
 from plugins import TextractorPlugin
+
+
+def runtime_debug_logging_enabled() -> bool:
+    import os
+    import sys
+    env_enabled = os.environ.get('SUGOIHOOK_DEBUG_LOGGING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    argv_enabled = any(str(arg).strip().lower() == '--debug' for arg in sys.argv[1:])
+    return env_enabled or argv_enabled
 from typing import Optional
 import logging
+import os
+import sys
 
 
 class RemoveEmptyPlugin(TextractorPlugin):
     def _log_debug(self, stage: str, **fields):
+        if not runtime_debug_logging_enabled():
+            return
         try:
             parts = []
             for key, value in fields.items():
