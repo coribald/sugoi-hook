@@ -6,6 +6,16 @@ echo.
 
 set "PIP_CACHE_DIR=%CD%\.pip-cache"
 set "NUITKA_CACHE_DIR=%CD%\.nuitka-cache"
+set "OUTPUT_DIR=SugoiHook_builds"
+set "PRESERVE_DIR=.build-preserve\release"
+
+echo Preserving runtime *_config.json files from %OUTPUT_DIR%...
+if exist "%PRESERVE_DIR%" rmdir /s /q "%PRESERVE_DIR%"
+mkdir "%PRESERVE_DIR%" >nul 2>&1
+if exist "%OUTPUT_DIR%\*_config.json" copy /y "%OUTPUT_DIR%\*_config.json" "%PRESERVE_DIR%\" >nul
+
+echo Cleaning previous release build artifacts...
+if exist "%OUTPUT_DIR%" rmdir /s /q "%OUTPUT_DIR%"
 
 REM Check if Nuitka and onefile compression support are installed
 python -c "import nuitka, zstandard" 2>nul
@@ -46,7 +56,7 @@ python -m nuitka ^
     --windows-console-mode=disable ^
     --force-stdout-spec={PROGRAM_BASE}.stdout.txt ^
     --force-stderr-spec={PROGRAM_BASE}.stderr.txt ^
-    --output-dir=SugoiHook_builds ^
+    --output-dir=%OUTPUT_DIR% ^
     --company-name="Sugoi Toolkit Inc." ^
     --product-name="Sugoi Hook" ^
     --file-version=2.0.1 ^
@@ -65,14 +75,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
+if exist "%PRESERVE_DIR%\*_config.json" (
+    echo Restoring preserved runtime config files...
+    copy /y "%PRESERVE_DIR%\*_config.json" "%OUTPUT_DIR%\" >nul
+)
+
 echo.
 echo ========================================
 echo Build Complete!
 echo ========================================
 echo.
-echo Executable created: SugoiHook_builds\SugoiHook.exe
+echo Executable created: %OUTPUT_DIR%\SugoiHook.exe
 echo.
 pause
-
-
-

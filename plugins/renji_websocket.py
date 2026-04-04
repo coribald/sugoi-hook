@@ -120,17 +120,19 @@ class RenjiWebSocketPlugin(TextractorPlugin):
 
     def stop_server(self):
         """Stop the WebSocket server"""
+        was_running = self.server_running or self.ws_server is not None
         self.server_running = False
         
         if self.ws_server:
             try:
                 self.ws_server.shutdown()
-            except:
+            except Exception:
                 pass
             self.ws_server = None
         
         self.connected_clients = []
-        print("[Renji WebSocket] Server stopped")
+        if was_running:
+            print("[Renji WebSocket] Server stopped")
 
     def send_to_renji(self, text: str):
         """Send text to all connected Renji clients"""

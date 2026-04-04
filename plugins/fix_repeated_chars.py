@@ -8,8 +8,27 @@ Example: "HHeelllloo" -> "Hello"
 
 from plugins import TextractorPlugin
 from typing import Optional
+import logging
 
 class RepeatedCharFixer(TextractorPlugin):
+    def _log_debug(self, stage: str, **fields):
+        try:
+            parts = []
+            for key, value in fields.items():
+                value_str = str(value).replace("\r", "\\r").replace("\n", "\\n")
+                if len(value_str) > 160:
+                    value_str = value_str[:160] + "..."
+                parts.append(f"{key}={value_str}")
+            message = f"[{self.name}] {stage}"
+            if parts:
+                message += " | " + " | ".join(parts)
+            logging.info(message)
+            try:
+                print(message, flush=True)
+            except Exception:
+                pass
+        except Exception:
+            pass
     """
     Fixes text where every character is repeated twice.
     
@@ -29,7 +48,9 @@ class RepeatedCharFixer(TextractorPlugin):
         super().__init__()
 
     def process_text(self, text: str) -> Optional[str]:
+        self._log_debug('process_text.in', text=text)
         if not text or len(text) < 2:
+            self._log_debug('process_text.out', output=text)
             return text
         
         # Helper to check if string s follows N-repetition
@@ -54,6 +75,7 @@ class RepeatedCharFixer(TextractorPlugin):
         # 1. Try raw text (in case everything is repeated or clean)
         res = solve(text)
         if res is not None:
+            self._log_debug('process_text.out', output=res)
             return res
             
         # 2. Try stripping the last newline (common if added by GUI wrapper)
@@ -63,8 +85,11 @@ class RepeatedCharFixer(TextractorPlugin):
             if len(s_stripped) >= 2:
                 res = solve(s_stripped)
                 if res is not None:
-                    return res + "\n"
+                    output = res + "\n"
+                    self._log_debug('process_text.out', output=output)
+                    return output
                     
+        self._log_debug('process_text.out', output=text)
         return text
 
 # Plugin instance for discovery

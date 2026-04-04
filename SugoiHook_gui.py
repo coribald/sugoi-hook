@@ -26,7 +26,7 @@ EARLY_LOG_STREAM = None
 EARLY_LOG_PATH = None
 
 
-def bootstrap_runtime_streams() -> Path | None:
+def bootstrap_runtime_streams():
     global EARLY_LOG_STREAM, EARLY_LOG_PATH
 
     try:
@@ -114,7 +114,7 @@ class StreamTee:
         return False
 
 
-def setup_runtime_logging() -> Path | None:
+def setup_runtime_logging():
     try:
         base_path = get_runtime_base_path()
         log_path = base_path / 'sugoihook-runtime.log'
@@ -248,6 +248,18 @@ class ModernTextractorGUI:
         
         # Statistics tracking
         self.stats = {'lines': 0, 'words': 0, 'chars': 0, 'start_time': None, 'last_update': time.time()}
+        self.status_notice_after_id = None
+        self.status_notice_text = ""
+        self.process_section_collapsed = False
+        self.hook_section_collapsed = False
+        self.plugins_section_collapsed = True
+        self.output_section_collapsed = False
+        self.events_section_collapsed = False
+        self.extracted_section_collapsed = False
+        self.window_geometry = None
+        self.compact_window_geometry = None
+        self.window_geometry_after_id = None
+        self.pipeline_debug_enabled = True
         
         # System tray
         self.tray_icon = None
@@ -344,6 +356,7 @@ class ModernTextractorGUI:
         
         # Initialize plugin system
         self.init_plugin_system()
+        self.apply_saved_window_geometry()
         
         # Check if CLI executables exist for both engines
         textractor_exists = self.textractor_x86_path.exists() or self.textractor_x64_path.exists()
@@ -376,9 +389,17 @@ class ModernTextractorGUI:
         self.root.bind('<Escape>', self.exit_fullscreen)
         self.root.bind('<Configure>', self.on_window_configure)
         
+
     def scale(self, value):
         """Scale a value based on DPI"""
         return int(value * self.scale_factor)
+
+    def run_on_ui_thread(self, callback, *args):
+        """Run a callback on the Tk UI thread."""
+        if threading.current_thread() is threading.main_thread():
+            callback(*args)
+        else:
+            self.root.after(0, lambda: callback(*args))
 
     # ==================== PLUGIN SYSTEM METHODS ====================
     
@@ -460,6 +481,8 @@ class ModernTextractorGUI:
                     self.active_plugins = config.get('active_plugins', [])
                     self.plugin_order = config.get('plugin_order', [])
                     self.plugin_settings = config.get('plugin_settings', {})
+                    self.window_geometry = config.get('window_geometry')
+                    self.compact_window_geometry = config.get('compact_window_geometry')
             except Exception:
                 pass
     
@@ -474,7 +497,9 @@ class ModernTextractorGUI:
                 config = {
                     'active_plugins': self.active_plugins,
                     'plugin_order': self.plugin_order,
-                    'plugin_settings': self.plugin_settings
+                    'plugin_settings': self.plugin_settings,
+                    'window_geometry': self.window_geometry,
+                    'compact_window_geometry': self.compact_window_geometry,
                 }
                 
                 # Ensure directory exists
@@ -485,6 +510,270 @@ class ModernTextractorGUI:
                     json.dump(config, f, indent=2)
             except Exception:
                 pass
+
+    def apply_saved_window_geometry(self):
+        """Restore the last saved main window size and position."""
+        if not self.window_geometry:
+            return
+        try:
+            self.root.geometry(self.window_geometry)
+        except Exception:
+            pass
+
+    def is_compact_window_layout(self):
+        """Return True when the window is in the compact collapsed layout."""
+        return self.process_section_collapsed and self.hook_section_collapsed and self.plugins_section_collapsed
+
+    def schedule_window_geometry_save(self):
+        """Debounce main window geometry persistence during drags/resizes."""
+        if self.window_geometry_after_id:
+            try:
+                self.root.after_cancel(self.window_geometry_after_id)
+            except Exception:
+                pass
+        self.window_geometry_after_id = self.root.after(250, self.persist_window_geometry)
+
+    def persist_window_geometry(self):
+        """Persist the current main window geometry when it is in a normal state."""
+        self.window_geometry_after_id = None
+        try:
+            if self.is_fullscreen:
+                return
+            if self.root.state() != 'normal':
+                return
+            geometry = self.root.geometry()
+            if not geometry:
+                return
+
+            changed = False
+            if self.is_compact_window_layout():
+                if geometry != self.compact_window_geometry:
+                    self.compact_window_geometry = geometry
+                    changed = True
+            else:
+                if geometry != self.window_geometry:
+                    self.window_geometry = geometry
+                    changed = True
+
+            if changed:
+                self.save_plugins_config()
+        except Exception:
+            pass
+
+    def restore_compact_window_geometry(self):
+        """Restore the last saved compact geometry when all top sections are collapsed."""
+        if not self.is_compact_window_layout():
+            return
+        geometry = self.compact_window_geometry or self.window_geometry
+        if not geometry:
+            return
+        try:
+            if self.root.state() == 'normal' and self.root.geometry() != geometry:
+                self.root.geometry(geometry)
+                if hasattr(self, 'update_scrollbar_visibility'):
+                    self.root.after(50, self.update_scrollbar_visibility)
+        except Exception:
+            pass
+
+    def restore_full_window_geometry(self):
+        """Restore the last saved expanded geometry when leaving compact mode."""
+        geometry = self.window_geometry
+        if not geometry:
+            return
+        try:
+            if self.root.state() == 'normal' and self.root.geometry() != geometry:
+                self.root.geometry(geometry)
+                if hasattr(self, 'update_scrollbar_visibility'):
+                    self.root.after(50, self.update_scrollbar_visibility)
+        except Exception:
+            pass
+
+    def notify_user(self, message, level='info', timeout_ms=4000):
+        """Show a lightweight in-app status notice instead of a modal dialog."""
+        if not hasattr(self, 'status_notice_label'):
+            return
+
+        colors = {
+            'info': self.colors['text_dim'],
+            'success': self.colors['success'],
+            'warning': self.colors['warning'],
+            'error': self.colors['secondary'],
+        }
+        self.status_notice_text = message
+        self.status_notice_label.config(
+            text=message,
+            foreground=colors.get(level, self.colors['text_dim'])
+        )
+
+        if self.status_notice_after_id:
+            try:
+                self.root.after_cancel(self.status_notice_after_id)
+            except Exception:
+                pass
+            self.status_notice_after_id = None
+
+        if timeout_ms:
+            self.status_notice_after_id = self.root.after(timeout_ms, self.clear_notice)
+
+    def clear_notice(self):
+        """Clear the transient status notice."""
+        self.status_notice_after_id = None
+        self.status_notice_text = ""
+        if hasattr(self, 'status_notice_label'):
+            self.status_notice_label.config(text="Ready", foreground=self.colors['text_dim'])
+
+    def get_selected_plugin_filename(self):
+        """Return the filename for the currently selected plugin row."""
+        if not hasattr(self, 'plugins_tree'):
+            return None
+
+        selection = self.plugins_tree.selection()
+        if not selection:
+            return None
+
+        item = self.plugins_tree.item(selection[0])
+        plugin_name = item['values'][1]
+
+        for filename, plugin in self.plugins.items():
+            if plugin.name == plugin_name:
+                return filename
+
+        return None
+
+    def get_hook_concatenation_state(self):
+        """Return whether hook concatenation mode is active and which hooks it is using."""
+        for plugin_filename, plugin in self.plugins.items():
+            try:
+                if getattr(plugin, 'name', '') != 'Hook Concatenation':
+                    continue
+                if plugin_filename not in self.active_plugins or not getattr(plugin, 'enabled', False):
+                    break
+                plugin_state = getattr(plugin, '_state', {})
+                enabled_mode = bool(plugin_state.get('enabled_mode', False))
+                dialogue_hook_id = str(plugin_state.get('dialogue_hook_id', '')).strip()
+                prefix_hook_ids = [hook_id.strip() for hook_id in str(plugin_state.get('prefix_hook_ids', '')).split(',') if hook_id.strip().isdigit()]
+                hook_ids = prefix_hook_ids + ([dialogue_hook_id] if dialogue_hook_id else [])
+                if not hook_ids:
+                    raw_hook_ids = str(plugin_state.get('hook_ids', '')).strip()
+                    hook_ids = [hook_id.strip() for hook_id in raw_hook_ids.split(',') if hook_id.strip().isdigit()]
+                buffered_hooks = list(plugin_state.get('hook_buffers', {}).keys())
+                return {
+                    'active': enabled_mode and bool(hook_ids),
+                    'hook_ids': hook_ids,
+                    'buffered_hooks': buffered_hooks,
+                    'dialogue_hook_id': dialogue_hook_id,
+                    'prefix_hook_ids': prefix_hook_ids,
+                    'speaker_wait_ms': int(plugin_state.get('speaker_wait_ms', 150)),
+                }
+            except Exception:
+                break
+
+        return {
+            'active': False,
+            'hook_ids': [],
+            'buffered_hooks': [],
+            'dialogue_hook_id': '',
+            'prefix_hook_ids': [],
+            'speaker_wait_ms': 150,
+        }
+
+    def format_hook_function_label(self, hook_id, function_name):
+        """Decorate hook list rows when hook concatenation mode is using them."""
+        concat_state = self.get_hook_concatenation_state()
+        if concat_state['active'] and str(hook_id) in concat_state['hook_ids']:
+            order_index = concat_state['hook_ids'].index(str(hook_id)) + 1
+            total = len(concat_state['hook_ids'])
+            return f"[Concat {order_index}/{total}] {function_name}"
+        return function_name
+
+    def refresh_hook_list_annotations(self):
+        """Refresh hook list labels to reflect concatenation mode markers."""
+        if not hasattr(self, 'hook_tree'):
+            return
+
+        for item in self.hook_tree.get_children():
+            values = list(self.hook_tree.item(item).get('values', ()))
+            if len(values) < 3:
+                continue
+            hook_id = str(values[0])
+            function_name = self.hooks.get(hook_id, {}).get('function', values[1])
+            preview = values[2]
+            self.hook_tree.item(item, values=(hook_id, self.format_hook_function_label(hook_id, function_name), preview))
+
+    def update_hook_status_panel(self, message=None):
+        """Refresh the hook state summary labels."""
+        if not hasattr(self, 'hook_status_summary'):
+            return
+
+        concat_state = self.get_hook_concatenation_state()
+        self.refresh_hook_list_annotations()
+
+        if self.attached_pid:
+            process_text = f"Attached PID: {self.attached_pid}"
+        else:
+            process_text = "Not attached"
+
+        engine_text = f"Engine: {'Luna' if self.current_engine == 'luna' else 'Textractor'}"
+        self.hook_status_summary.config(
+            text=f"{process_text} | {engine_text}",
+            foreground=self.colors['success'] if self.attached_pid else self.colors['text_dim']
+        )
+
+        if concat_state['active']:
+            hooks_text = ', '.join(concat_state['hook_ids'])
+            self.hook_active_label.config(
+                text=f"Current source: Hook Concatenation (prefix: {', '.join(concat_state['prefix_hook_ids']) or 'none'} | dialogue: {concat_state['dialogue_hook_id'] or hooks_text})",
+                foreground=self.colors['primary']
+            )
+        elif self.selected_hook_id:
+            hook_info = self.hooks.get(self.selected_hook_id, {})
+            function_name = hook_info.get('function', 'Unknown')
+            self.hook_active_label.config(
+                text=f"Current hook: ID {self.selected_hook_id} ({function_name})",
+                foreground=self.colors['primary']
+            )
+        else:
+            self.hook_active_label.config(
+                text="Current hook: none selected",
+                foreground=self.colors['text_dim']
+            )
+
+        if hasattr(self, 'hook_concat_label'):
+            if concat_state['active']:
+                buffered = [hook_id for hook_id in concat_state['hook_ids'] if hook_id in concat_state['buffered_hooks']]
+                waiting = [hook_id for hook_id in concat_state['hook_ids'] if hook_id not in concat_state['buffered_hooks']]
+                buffered_text = ', '.join(buffered) if buffered else 'none yet'
+                waiting_text = ', '.join(waiting) if waiting else 'ready'
+                self.hook_concat_label.config(
+                    text=f"Concatenation: active | seen {buffered_text} | waiting {waiting_text} | grace {concat_state['speaker_wait_ms']}ms",
+                    foreground=self.colors['accent'] if waiting else self.colors['success']
+                )
+            else:
+                self.hook_concat_label.config(
+                    text="Concatenation: inactive",
+                    foreground=self.colors['text_dim']
+                )
+
+        profile_text = "Saved profile: none"
+        profile_color = self.colors['text_dim']
+        if self.current_game_id and self.current_game_id in self.game_profiles:
+            profile = self.game_profiles[self.current_game_id]
+            profile_text = f"Saved profile: {profile.get('hook_function', profile.get('hook_data', 'available'))}"
+            profile_color = self.colors['accent']
+
+        if self.auto_hook_pending:
+            profile_text = "Saved profile: auto-hook pending"
+            profile_color = self.colors['warning']
+
+        self.hook_profile_label.config(text=profile_text, foreground=profile_color)
+
+        if message:
+            self.hook_last_action_label.config(text=f"Last action: {message}", foreground=self.colors['fg'])
+        elif self.hook_last_action_label.cget('text') == "":
+            self.hook_last_action_label.config(
+                text="Last action: waiting for attachment",
+                foreground=self.colors['text_dim']
+            )
     
     def load_plugin(self, plugin_path):
         """Load a single plugin from a file path"""
@@ -516,6 +805,10 @@ class ModernTextractorGUI:
                         break
             
             if plugin_instance:
+                try:
+                    plugin_instance.app = self
+                except Exception:
+                    pass
                 self.plugins[plugin_path.name] = plugin_instance
                 return plugin_instance
                 
@@ -548,20 +841,79 @@ class ModernTextractorGUI:
             self.save_plugins_config()
             return True
         return False
+
+    def _pipeline_preview(self, value, limit=180):
+        """Return a compact one-line preview for pipeline logging."""
+        if value is None:
+            return "<None>"
+        text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+        if len(text) > limit:
+            return text[:limit] + "..."
+        return text
+
+    def log_pipeline(self, stage, **fields):
+        """Emit focused pipeline diagnostics to the runtime log."""
+        if not getattr(self, 'pipeline_debug_enabled', False):
+            return
+        try:
+            parts = []
+            for key, value in fields.items():
+                if isinstance(value, str):
+                    value = self._pipeline_preview(value)
+                elif value is None:
+                    value = '<None>'
+                parts.append(f"{key}={value}")
+            message = f"[PIPELINE] {stage}"
+            if parts:
+                message += " | " + " | ".join(parts)
+            logging.info(message)
+            try:
+                print(message, flush=True)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def shutdown_plugin_instances(self):
+        """Run plugin teardown and clear dynamically loaded plugin modules."""
+        plugin_filenames = list(self.plugins.keys())
+
+        for plugin_filename in plugin_filenames:
+            plugin = self.plugins.get(plugin_filename)
+            if plugin is None:
+                continue
+            try:
+                plugin.enabled = False
+            except Exception:
+                pass
+            try:
+                plugin.on_disable()
+            except Exception:
+                logging.exception('Failed to disable plugin during shutdown: %s', plugin_filename)
+
+        self.active_plugins = []
+
+        for plugin_filename in plugin_filenames:
+            module_name = Path(plugin_filename).stem
+            try:
+                sys.modules.pop(module_name, None)
+            except Exception:
+                pass
+
     
-    def process_text_through_plugins(self, text):
-        """Process text through all active plugins"""
+    def run_pre_translation_plugins(self, text):
+        """Run the shared pre-translation plugin pipeline and collect later phases."""
         if not PLUGINS_AVAILABLE:
-            return text
-        
+            return text, [], []
+
         current_text = text
         translation_plugins = []
         post_translation_plugins = []
         translation_phase_started = False
-        
-        # Determine execution order: plugin_order filtered by active state
+
         execution_order = [p for p in self.plugin_order if p in self.active_plugins]
-        
+        self.log_pipeline('pre_translation.start', incoming=text, active_plugins=execution_order)
+
         for plugin_filename in execution_order:
             if plugin_filename in self.plugins:
                 plugin = self.plugins[plugin_filename]
@@ -580,69 +932,106 @@ class ModernTextractorGUI:
                 try:
                     result = plugin.process_text(current_text)
                     if result is None:
-                        return None
+                        self.log_pipeline('pre_translation.plugin_dropped', plugin=plugin_filename, incoming=current_text)
+                        return None, translation_plugins, post_translation_plugins
+                    self.log_pipeline('pre_translation.plugin_result', plugin=plugin_filename, output=result)
                     current_text = result
                 except Exception:
                     pass
 
+        self.log_pipeline('pre_translation.complete', output=current_text, translation_plugins=[getattr(p, 'name', type(p).__name__) for p in translation_plugins], post_plugins=[getattr(p, 'name', type(p).__name__) for p in post_translation_plugins])
+        return current_text, translation_plugins, post_translation_plugins
+
+    def process_plugin_output_bundle(self, text):
+        """Build display and clipboard outputs from one shared plugin pass."""
+        if not PLUGINS_AVAILABLE:
+            stripped = text.strip() if isinstance(text, str) else text
+            return text, stripped
+
+        current_text, translation_plugins, post_translation_plugins = self.run_pre_translation_plugins(text)
+        if current_text is None:
+            self.log_pipeline('bundle.dropped_pre_translation', incoming=text)
+            return None, None
+
+        translator_input = current_text.strip() if isinstance(current_text, str) else current_text
+        self.log_pipeline('bundle.start', current_text=current_text, translator_input=translator_input, translation_plugin_count=len(translation_plugins), post_plugin_count=len(post_translation_plugins))
+        clipboard_text = translator_input
+        display_text = current_text
+
         if translation_plugins:
-            base_text = current_text
             translation_results = []
 
             for plugin in translation_plugins:
                 try:
-                    translated = plugin.translate_text(base_text)
+                    translated = plugin.translate_text(translator_input)
                     if translated:
                         translation_results.append((plugin.name, translated.strip()))
+                        self.log_pipeline('translation.result', plugin=plugin.name, translated=translated.strip())
+                    else:
+                        self.log_pipeline('translation.empty', plugin=plugin.name, translator_input=translator_input)
                 except Exception:
                     pass
+                finally:
+                    try:
+                        remember_line = getattr(plugin, 'remember_original_line', None)
+                        if callable(remember_line) and translator_input:
+                            remember_line(translator_input)
+                    except Exception:
+                        pass
 
             if translation_results:
                 if len(translation_results) == 1:
-                    current_text = f"{base_text.rstrip()}\n{translation_results[0][1]}\n\n"
+                    display_text = f"{current_text.rstrip()}\n{translation_results[0][1]}\n\n"
                 else:
                     formatted_translations = "\n".join(
                         f"[{plugin_name}] {translated_text}"
                         for plugin_name, translated_text in translation_results
                     )
-                    current_text = f"{base_text.rstrip()}\n{formatted_translations}\n\n"
+                    display_text = f"{current_text.rstrip()}\n{formatted_translations}\n\n"
             else:
-                current_text = base_text
+                display_text = current_text
+            self.log_pipeline('bundle.translation_phase_complete', display_text=display_text, clipboard_text=clipboard_text)
+        else:
+            execution_order = [p for p in self.plugin_order if p in self.active_plugins]
+            clipboard_current = current_text
+            for plugin_filename in execution_order:
+                if plugin_filename in self.plugins:
+                    plugin = self.plugins[plugin_filename]
+                    if plugin.enabled:
+                        try:
+                            result = plugin.process_clipboard_text(clipboard_current)
+                            if result is None:
+                                self.log_pipeline('clipboard.plugin_dropped', plugin=plugin_filename, incoming=clipboard_current)
+                                return display_text, None
+                            self.log_pipeline('clipboard.plugin_result', plugin=plugin_filename, output=result)
+                            clipboard_current = result
+                        except Exception:
+                            pass
+            clipboard_text = clipboard_current.strip() if isinstance(clipboard_current, str) else clipboard_current
 
         for plugin in post_translation_plugins:
             try:
-                result = plugin.process_text(current_text)
+                result = plugin.process_text(display_text)
                 if result is None:
-                    return None
-                current_text = result
+                    self.log_pipeline('post_translation.plugin_dropped', plugin=getattr(plugin, 'name', type(plugin).__name__), incoming=display_text)
+                    return None, None
+                self.log_pipeline('post_translation.plugin_result', plugin=getattr(plugin, 'name', type(plugin).__name__), output=result)
+                display_text = result
             except Exception:
                 pass
-        
-        return current_text
+
+        self.log_pipeline('bundle.complete', display_text=display_text, clipboard_text=clipboard_text)
+        return display_text, clipboard_text
+
+    def process_text_through_plugins(self, text):
+        """Process text through all active plugins for display output."""
+        processed_text, _clipboard_text = self.process_plugin_output_bundle(text)
+        return processed_text
 
     def process_clipboard_text_through_plugins(self, text):
-        """Process text through active plugins for clipboard-safe output"""
-        if not PLUGINS_AVAILABLE:
-            return text
-
-        current_text = text
-
-        execution_order = [p for p in self.plugin_order if p in self.active_plugins]
-
-        for plugin_filename in execution_order:
-            if plugin_filename in self.plugins:
-                plugin = self.plugins[plugin_filename]
-                if plugin.enabled:
-                    try:
-                        result = plugin.process_clipboard_text(current_text)
-                        if result is None:
-                            return None
-                        current_text = result
-                    except Exception:
-                        pass
-
-        return current_text
-    
+        """Process text through active plugins for clipboard-safe output."""
+        _processed_text, clipboard_text = self.process_plugin_output_bundle(text)
+        return clipboard_text
     def reset_all_plugins(self):
         """Reset state of all plugins"""
         for plugin in self.plugins.values():
@@ -674,10 +1063,10 @@ class ModernTextractorGUI:
                     self.plugin_order.append(filename)
             
             # Display plugins in the order defined by plugin_order
-            for filename in self.plugin_order:
+            for index, filename in enumerate(self.plugin_order, start=1):
                 if filename in self.plugins:
                     plugin = self.plugins[filename]
-                    status = "✓ Active" if filename in self.active_plugins else "○ Inactive"
+                    status = f"{index}. ✓ Active" if filename in self.active_plugins else f"{index}. ○ Inactive"
                     
                     # Check if plugin has settings to show configure button
                     has_settings = bool(plugin.get_settings())
@@ -695,34 +1084,73 @@ class ModernTextractorGUI:
         # Update count label
         if hasattr(self, 'plugins_count_label'):
             self.plugins_count_label.config(text=f"Active: {len(self.active_plugins)} plugins")
-    
+
+        self.update_plugin_action_buttons()
+
+    def update_plugin_action_buttons(self):
+        """Enable or disable plugin action buttons based on selection."""
+        if not hasattr(self, 'plugin_toggle_btn'):
+            return
+
+        plugin_filename = self.get_selected_plugin_filename()
+        state = 'normal' if plugin_filename else 'disabled'
+
+        self.plugin_toggle_btn.config(state=state)
+        self.plugin_move_up_btn.config(state=state)
+        self.plugin_move_down_btn.config(state=state)
+
+        if plugin_filename and plugin_filename in self.plugins and self.plugins[plugin_filename].get_settings():
+            self.plugin_configure_btn.config(state='normal')
+        else:
+            self.plugin_configure_btn.config(state='disabled')
+
+    def move_selected_plugin(self, direction):
+        """Move the selected plugin up or down in execution order."""
+        plugin_filename = self.get_selected_plugin_filename()
+        if not plugin_filename:
+            self.notify_user("Select a plugin to reorder.", level='warning')
+            return
+
+        try:
+            current_index = self.plugin_order.index(plugin_filename)
+        except ValueError:
+            return
+
+        new_index = current_index + direction
+        if new_index < 0 or new_index >= len(self.plugin_order):
+            return
+
+        self.plugin_order[current_index], self.plugin_order[new_index] = self.plugin_order[new_index], self.plugin_order[current_index]
+        self.save_plugins_config()
+        self.refresh_plugins_list()
+
+        for item in self.plugins_tree.get_children():
+            if self.plugins_tree.item(item, 'text') == plugin_filename:
+                self.plugins_tree.selection_set(item)
+                self.plugins_tree.see(item)
+                break
+
+        self.notify_user("Plugin order updated.", level='success')
+
     def toggle_selected_plugin(self):
         """Toggle the selected plugin's active state"""
         if not hasattr(self, 'plugins_tree'):
             return
-        
-        selection = self.plugins_tree.selection()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select a plugin to toggle.")
+
+        plugin_filename = self.get_selected_plugin_filename()
+        if not plugin_filename:
+            self.notify_user("Select a plugin to toggle.", level='warning')
             return
-        
-        item = self.plugins_tree.item(selection[0])
-        plugin_name = item['values'][1]  # Get plugin name from values
-        
-        # Find the plugin filename by name
-        plugin_filename = None
-        for filename, plugin in self.plugins.items():
-            if plugin.name == plugin_name:
-                plugin_filename = filename
-                break
-        
-        if plugin_filename:
-            if plugin_filename in self.active_plugins:
-                self.deactivate_plugin(plugin_filename)
-            else:
-                self.activate_plugin(plugin_filename)
-            
-            self.refresh_plugins_list()
+
+        if plugin_filename in self.active_plugins:
+            self.deactivate_plugin(plugin_filename)
+            notice = f"Disabled {self.plugins[plugin_filename].name}."
+        else:
+            self.activate_plugin(plugin_filename)
+            notice = f"Enabled {self.plugins[plugin_filename].name}."
+
+        self.refresh_plugins_list()
+        self.notify_user(notice, level='success')
     
     def add_plugin_from_file(self):
         """Add a new plugin by copying it to the plugins folder"""
@@ -748,7 +1176,7 @@ class ModernTextractorGUI:
                     # Automatically activate the new plugin
                     self.activate_plugin(dest_path.name)
                     self.refresh_plugins_list()
-                    messagebox.showinfo("Success", f"Plugin '{plugin.name}' added and activated!")
+                    self.notify_user(f"Plugin '{plugin.name}' added and activated.", level='success')
                 else:
                     # Remove the file if it's not a valid plugin
                     dest_path.unlink()
@@ -805,7 +1233,7 @@ class ModernTextractorGUI:
                     self.save_plugins_config()
                     
                     self.refresh_plugins_list()
-                    messagebox.showinfo("Success", f"Plugin '{plugin_name}' has been removed.")
+                    self.notify_user(f"Plugin '{plugin_name}' removed.", level='success')
                     
                 except Exception as e:
                     messagebox.showerror("Error", f"Failed to remove plugin:\n{str(e)}")
@@ -860,187 +1288,274 @@ class ModernTextractorGUI:
         selection = self.plugins_tree.selection()
         if not selection:
             return
-        
+
         item = self.plugins_tree.item(selection[0])
         plugin_name = item['values'][1]
-        
-        # Find the plugin filename
+
         plugin_filename = None
         for filename, plugin in self.plugins.items():
             if plugin.name == plugin_name:
                 plugin_filename = filename
                 break
-        
+
         if not plugin_filename:
             return
-        
+
         plugin = self.plugins[plugin_filename]
         settings = plugin.get_settings()
-        
+
         if not settings:
-            messagebox.showinfo("No Settings", f"Plugin '{plugin_name}' has no configurable settings.")
+            self.notify_user(f"Plugin '{plugin_name}' has no configurable settings.", level='info')
             return
-        
-        # Create settings dialog with larger size for more settings
+
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Configure {plugin_name}")
         dialog.geometry("800x900")
         dialog.configure(bg=self.colors['bg'])
         dialog.transient(self.root)
         dialog.grab_set()
-        
-        # Main container
+
         container = ttk.Frame(dialog, style="TFrame")
         container.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
-        
-        # Title card
+
         title_card = ttk.Frame(container, style="Card.TFrame", padding=15)
         title_card.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(title_card, text=f"⚙️ {plugin_name} Settings", 
-                 font=('Segoe UI', 14, 'bold'),
-                 foreground=self.colors['primary']).pack()
-        
-        # Scrollable settings area
+        ttk.Label(
+            title_card,
+            text=f"⚙️ {plugin_name} Settings",
+            font=('Segoe UI', 14, 'bold'),
+            foreground=self.colors['primary']
+        ).pack()
+
         settings_card = ttk.Frame(container, style="Card.TFrame", padding=15)
         settings_card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        
-        # Create canvas and scrollbar for scrollable content
+
         canvas = tk.Canvas(settings_card, bg=self.colors['surface'], highlightthickness=0)
         scrollbar = ttk.Scrollbar(settings_card, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style="Card.TFrame")
-        
+
         scrollable_frame.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=canvas.winfo_width())
+
+        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=canvas.winfo_width())
         canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Bind canvas width to scrollable frame width
+
         def configure_canvas_width(event):
-            canvas.itemconfig(canvas.find_withtag("all")[0], width=event.width)
+            canvas.itemconfig(canvas_window, width=event.width)
         canvas.bind('<Configure>', configure_canvas_width)
-        
+
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Enable mousewheel scrolling
+
+        def widget_is_descendant(child, ancestor):
+            current = child
+            while current is not None:
+                if current == ancestor:
+                    return True
+                try:
+                    parent_name = current.winfo_parent()
+                except Exception:
+                    return False
+                if not parent_name:
+                    return False
+                try:
+                    current = current._nametowidget(parent_name)
+                except Exception:
+                    return False
+            return False
+
         def on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            try:
+                hovered = dialog.winfo_containing(event.x_root, event.y_root)
+            except Exception:
+                hovered = event.widget
+
+            if hovered is None or not widget_is_descendant(hovered, canvas):
+                return
+
+            try:
+                hovered_class = hovered.winfo_class().lower()
+            except Exception:
+                hovered_class = ''
+
+            if hovered_class in {'tcombobox', 'combobox', 'listbox', 'text', 'entry', 'spinbox'}:
+                return
+
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            return "break"
         canvas.bind_all("<MouseWheel>", on_mousewheel)
-        
-        # Settings widgets
+
         setting_widgets = {}
-        
+        overlay_preview = {'card': None, 'frame': None, 'translation': None, 'original': None, 'warning': None}
+
+        def resolve_setting_value(var, options, value_type):
+            if value_type in ('choice', 'color') and options:
+                display_value = var.get()
+                if value_type == 'color' and ' - ' in display_value:
+                    return display_value.split(' - ')[0]
+                for key, display in options.items():
+                    if display == display_value or key == display_value:
+                        return key
+                return display_value
+            if value_type == 'multiline_str':
+                return var.get('1.0', tk.END).rstrip('\n')
+            return var.get()
+
+        def safe_preview_font(font_name, size, bold=False, italic=False):
+            styles = []
+            if bold:
+                styles.append('bold')
+            if italic:
+                styles.append('italic')
+            return (font_name, size, ' '.join(styles)) if styles else (font_name, size)
+
+        def refresh_overlay_preview(*_args):
+            if plugin_filename != 'overlay_window.py' or not overlay_preview['frame']:
+                return
+            try:
+                values = {
+                    name: resolve_setting_value(var, options, value_type)
+                    for name, (var, options, value_type) in setting_widgets.items()
+                }
+                bg_color = values.get('bg_color', '#1e1e2e')
+                border_color = values.get('border_color', self.colors['border'])
+                overlay_preview['frame'].configure(
+                    bg=bg_color,
+                    highlightbackground=border_color,
+                    highlightcolor=border_color
+                )
+                overlay_preview['translation'].configure(
+                    bg=bg_color,
+                    fg=values.get('translation_color', '#89b4fa'),
+                    font=safe_preview_font(
+                        values.get('translation_font', 'Segoe UI'),
+                        int(values.get('translation_font_size', 14)),
+                        bold=bool(values.get('translation_bold', True))
+                    )
+                )
+                overlay_preview['original'].configure(
+                    bg=bg_color,
+                    fg=values.get('original_color', '#a6adc8'),
+                    font=safe_preview_font(
+                        values.get('original_font', 'Segoe UI'),
+                        int(values.get('original_font_size', 10))
+                    )
+                )
+                overlay_preview['warning'].configure(
+                    bg=bg_color,
+                    fg=values.get('warning_color', '#f9e2af'),
+                    font=safe_preview_font(
+                        values.get('warning_font', 'Segoe UI'),
+                        int(values.get('warning_font_size', 12)),
+                        italic=bool(values.get('warning_italic', True))
+                    )
+                )
+            except Exception:
+                pass
+
         for setting_name, setting_info in settings.items():
             current_value, value_type, description, *options = setting_info
             options = options[0] if options else None
-            
-            # Setting frame
+
             setting_frame = ttk.Frame(scrollable_frame)
             setting_frame.pack(fill=tk.X, pady=8, padx=5)
-            
-            # Label
-            ttk.Label(setting_frame, text=description + ":", 
-                     font=('Segoe UI', 10, 'bold'),
-                     foreground=self.colors['fg']).pack(anchor=tk.W, pady=(0, 5))
-            
-            # Widget based on type
+
+            ttk.Label(
+                setting_frame,
+                text=description + ":",
+                font=('Segoe UI', 10, 'bold'),
+                foreground=self.colors['fg']
+            ).pack(anchor=tk.W, pady=(0, 5))
+
             if value_type == 'color' and options:
-                # Color dropdown with preview
                 color_frame = ttk.Frame(setting_frame)
                 color_frame.pack(fill=tk.X)
-                
                 var = tk.StringVar(value=current_value)
-                
-                # Create combobox with search capability
                 combo = ttk.Combobox(color_frame, textvariable=var, width=35)
-                
-                # Set display values (color + description)
-                display_values = [f"{key} - {value}" for key, value in options.items()]
-                combo['values'] = display_values
-                
-                # Set current selection
+                combo['values'] = [f"{key} - {value}" for key, value in options.items()]
                 if current_value in options:
                     combo.set(f"{current_value} - {options[current_value]}")
-                
                 combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-                
-                # Color preview box
-                preview_canvas = tk.Canvas(color_frame, width=40, height=25, 
-                                          bg=current_value, highlightthickness=1,
-                                          highlightbackground=self.colors['border'])
+
+                preview_canvas = tk.Canvas(
+                    color_frame,
+                    width=40,
+                    height=25,
+                    bg=current_value,
+                    highlightthickness=1,
+                    highlightbackground=self.colors['border']
+                )
                 preview_canvas.pack(side=tk.LEFT)
-                
-                # Update preview when selection changes
-                def update_preview(event=None):
+
+                def update_preview(event=None, combo=combo, preview_canvas=preview_canvas):
                     selected = combo.get()
                     if ' - ' in selected:
                         color_code = selected.split(' - ')[0]
                         try:
                             preview_canvas.config(bg=color_code)
-                        except:
+                        except Exception:
                             pass
-                
+                    refresh_overlay_preview()
+
                 combo.bind('<<ComboboxSelected>>', update_preview)
                 combo.bind('<KeyRelease>', update_preview)
-                
                 setting_widgets[setting_name] = (var, options, value_type)
-            
+
             elif value_type == 'int_slider' and options:
-                # Slider for integer values
                 slider_frame = ttk.Frame(setting_frame)
                 slider_frame.pack(fill=tk.X)
-                
                 var = tk.IntVar(value=current_value)
-                
-                # Value label
-                value_label = ttk.Label(slider_frame, text=str(current_value), 
-                                       font=('Segoe UI', 10, 'bold'),
-                                       foreground=self.colors['primary'])
+                value_label = ttk.Label(
+                    slider_frame,
+                    text=str(current_value),
+                    font=('Segoe UI', 10, 'bold'),
+                    foreground=self.colors['primary']
+                )
                 value_label.pack(side=tk.RIGHT, padx=(10, 0))
-                
-                # Slider
-                slider = tk.Scale(slider_frame, from_=options['min'], to=options['max'],
-                                 orient=tk.HORIZONTAL, variable=var,
-                                 bg=self.colors['surface'], fg=self.colors['fg'],
-                                 highlightthickness=0, troughcolor=self.colors['surface_light'],
-                                 activebackground=self.colors['primary'],
-                                 command=lambda v: value_label.config(text=str(int(float(v)))))
+                slider = tk.Scale(
+                    slider_frame,
+                    from_=options['min'],
+                    to=options['max'],
+                    orient=tk.HORIZONTAL,
+                    variable=var,
+                    bg=self.colors['surface'],
+                    fg=self.colors['fg'],
+                    highlightthickness=0,
+                    troughcolor=self.colors['surface_light'],
+                    activebackground=self.colors['primary'],
+                    command=lambda v, label=value_label: label.config(text=str(int(float(v))))
+                )
                 slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
-                
+                var.trace_add('write', refresh_overlay_preview)
                 setting_widgets[setting_name] = (var, options, value_type)
-                
+
             elif value_type == 'choice' and options:
-                # Dropdown with search
                 var = tk.StringVar(value=current_value)
                 combo = ttk.Combobox(setting_frame, textvariable=var)
-                
-                # Set display values
-                display_values = [options.get(key, key) for key in options.keys()]
-                combo['values'] = display_values
-                
-                # Set current selection
+                combo['values'] = [options.get(key, key) for key in options.keys()]
                 if current_value in options:
                     combo.set(options[current_value])
-                
                 combo.pack(fill=tk.X)
+                combo.bind('<<ComboboxSelected>>', refresh_overlay_preview)
+                combo.bind('<KeyRelease>', refresh_overlay_preview)
                 setting_widgets[setting_name] = (var, options, value_type)
-                
+
             elif value_type == 'bool':
                 var = tk.BooleanVar(value=current_value)
                 check = ttk.Checkbutton(setting_frame, text="Enabled", variable=var)
                 check.pack(anchor=tk.W)
+                var.trace_add('write', refresh_overlay_preview)
                 setting_widgets[setting_name] = (var, None, value_type)
-                
+
             elif value_type == 'int':
                 var = tk.IntVar(value=current_value)
                 entry = ttk.Entry(setting_frame, textvariable=var)
                 entry.pack(fill=tk.X)
+                var.trace_add('write', refresh_overlay_preview)
                 setting_widgets[setting_name] = (var, None, value_type)
-                
+
             elif value_type == 'secret':
                 var = tk.StringVar(value=current_value)
                 entry = ttk.Entry(setting_frame, textvariable=var, show='*')
@@ -1048,8 +1563,12 @@ class ModernTextractorGUI:
                 setting_widgets[setting_name] = (var, None, value_type)
 
             elif value_type == 'multiline_str':
+                text_frame = ttk.Frame(setting_frame)
+                text_frame.pack(fill=tk.BOTH, expand=True)
+                text_frame.columnconfigure(0, weight=1)
+                text_frame.rowconfigure(0, weight=1)
                 text_widget = tk.Text(
-                    setting_frame,
+                    text_frame,
                     height=10,
                     wrap=tk.WORD,
                     bg=self.colors['surface'],
@@ -1058,87 +1577,87 @@ class ModernTextractorGUI:
                     relief=tk.FLAT,
                     borderwidth=1
                 )
-                text_widget.pack(fill=tk.BOTH, expand=True)
+                text_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+                text_widget.configure(yscrollcommand=text_scrollbar.set)
+                text_widget.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+                text_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
                 if current_value:
                     text_widget.insert('1.0', current_value)
                 setting_widgets[setting_name] = (text_widget, None, value_type)
 
-            else:  # str
+            else:
                 var = tk.StringVar(value=current_value)
                 entry = ttk.Entry(setting_frame, textvariable=var)
                 entry.pack(fill=tk.X)
                 setting_widgets[setting_name] = (var, None, value_type)
-        
-        # Buttons frame at bottom (not scrollable)
+
+        if plugin_filename == 'overlay_window.py':
+            preview_card = ttk.Frame(container, style="Card.TFrame", padding=15)
+            preview_card.pack(fill=tk.X, pady=(0, 10))
+            ttk.Label(
+                preview_card,
+                text="Live Preview",
+                font=('Segoe UI', 11, 'bold'),
+                foreground=self.colors['primary']
+            ).pack(anchor=tk.W, pady=(0, 8))
+            preview_frame = tk.Frame(
+                preview_card,
+                bg='#1e1e2e',
+                highlightthickness=1,
+                highlightbackground=self.colors['border'],
+                padx=14,
+                pady=12
+            )
+            preview_frame.pack(fill=tk.X)
+            translation_label = tk.Label(preview_frame, text='Girl: "Do I look a little tired?"', anchor='w', justify='left')
+            translation_label.pack(fill=tk.X)
+            original_label = tk.Label(preview_frame, text='少女「少し疲れた感じ、出てるかな」', anchor='w', justify='left', pady=4)
+            original_label.pack(fill=tk.X)
+            warning_label = tk.Label(preview_frame, text='Please enable the translation plugin', anchor='w', justify='left')
+            warning_label.pack(fill=tk.X, pady=(6, 0))
+            overlay_preview.update({
+                'card': preview_card,
+                'frame': preview_frame,
+                'translation': translation_label,
+                'original': original_label,
+                'warning': warning_label,
+            })
+            refresh_overlay_preview()
+
         btn_card = ttk.Frame(container, style="Card.TFrame", padding=15)
         btn_card.pack(fill=tk.X)
-        
+
         def save_settings():
-            """Save the settings"""
-            # Ensure plugin_settings dict has entry for this plugin
             if plugin_filename not in self.plugin_settings:
                 self.plugin_settings[plugin_filename] = {}
-            
+
             for setting_name, (var, options, value_type) in setting_widgets.items():
-                if value_type in ('choice', 'color') and options:
-                    # Reverse lookup: get key from display value
-                    display_value = var.get()
-                    actual_value = None
-                    
-                    # Handle color format (code - description)
-                    if value_type == 'color' and ' - ' in display_value:
-                        actual_value = display_value.split(' - ')[0]
-                    else:
-                        for key, display in options.items():
-                            if display == display_value or key == display_value:
-                                actual_value = key
-                                break
-                    
-                    if actual_value is not None:
-                        plugin.set_setting(setting_name, actual_value)
-                        self.plugin_settings[plugin_filename][setting_name] = actual_value
-                elif value_type == 'multiline_str':
-                    value = var.get('1.0', tk.END).rstrip('\n')
-                    plugin.set_setting(setting_name, value)
-                    self.plugin_settings[plugin_filename][setting_name] = value
-                else:
-                    value = var.get()
-                    plugin.set_setting(setting_name, value)
-                    self.plugin_settings[plugin_filename][setting_name] = value
-            
-            # Save to config file
+                value = resolve_setting_value(var, options, value_type)
+                plugin.set_setting(setting_name, value)
+                self.plugin_settings[plugin_filename][setting_name] = value
+
             self.save_plugins_config()
-            
-            # Unbind mousewheel before closing
+            self.update_hook_status_panel()
+            self.update_hook_action_state()
             canvas.unbind_all("<MouseWheel>")
-            
-            messagebox.showinfo("Success", "Settings saved successfully!")
+            self.notify_user(f"Saved settings for {plugin_name}.", level='success')
             dialog.destroy()
-        
+
         def cancel():
-            """Close dialog without saving"""
-            # Unbind mousewheel before closing
             canvas.unbind_all("<MouseWheel>")
             dialog.destroy()
-        
-        # Center buttons
+
         btn_container = ttk.Frame(btn_card)
         btn_container.pack(expand=True)
-        
-        ttk.Button(btn_container, text="💾 Save Settings", command=save_settings,
-                  style="TButton").pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(btn_container, text="✖️ Cancel", command=cancel,
-                  style="Secondary.TButton").pack(side=tk.LEFT)
-        
-        # Center the dialog
+        ttk.Button(btn_container, text="💾 Save Settings", command=save_settings, style="TButton").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(btn_container, text="✖️ Cancel", command=cancel, style="Disclosure.TButton").pack(side=tk.LEFT)
+
         dialog.update_idletasks()
         x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
         y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
         dialog.geometry(f"+{x}+{y}")
-        
-        # Handle dialog close
         dialog.protocol("WM_DELETE_WINDOW", cancel)
-    
+
     # ==================== END PLUGIN SYSTEM METHODS ====================
     
     # ==================== GAME PROFILES SYSTEM METHODS ====================
@@ -1233,7 +1752,7 @@ class ModernTextractorGUI:
             self.save_game_profiles()
             
             # Show brief notification
-            self.append_output(f"💾 Hook profile saved for {exe_name}\n")
+            self.append_event(f"💾 Hook profile saved for {exe_name}\n")
             
         except Exception:
             pass
@@ -1264,19 +1783,20 @@ class ModernTextractorGUI:
                 # Check if we need to switch engine
                 saved_engine = profile.get('engine', 'luna')
                 if saved_engine != self.current_engine:
-                    self.append_output(f"🔄 Switching to {saved_engine} engine for this game...\n")
+                    self.append_event(f"🔄 Switching to {saved_engine} engine for this game...\n")
                     # Note: Need to detach and reattach with correct engine
                     # For now, just show a warning in the output
-                    self.append_output(f"⚠️ This game was saved with {saved_engine} engine.\n")
-                    self.append_output(f"   Currently using {self.current_engine}. Consider switching engines.\n\n")
+                    self.append_event(f"⚠️ This game was saved with {saved_engine} engine.\n")
+                    self.append_event(f"   Currently using {self.current_engine}. Consider switching engines.\n\n")
                 
                 # Show notification
-                self.append_output(f"🔍 Found saved profile for {profile['exe_name']}\n")
-                self.append_output(f"⌛ Will auto-select hook: {profile['hook_function']}\n\n")
+                self.append_event(f"🔍 Found saved profile for {profile['exe_name']}\n")
+                self.append_event(f"⌛ Will auto-select hook: {profile['hook_function']}\n\n")
             
             # Set auto-hook pending flag
             self.auto_hook_pending = True
             self.auto_hook_data = profile
+            self.update_hook_status_panel("found saved hook profile")
     
     def attempt_auto_hook(self):
         """Attempt to automatically select saved hook with improved matching"""
@@ -1295,7 +1815,9 @@ class ModernTextractorGUI:
                     self.cli_process.stdin.write(command)
                     self.cli_process.stdin.flush()
                     
-                    self.append_output(f"✓ Auto-attached manual hook: {hook_code}\n\n")
+                    self.append_event(f"✓ Auto-attached manual hook: {hook_code}\n\n")
+                    self.update_hook_status_panel(f"auto-attached manual hook {hook_code}")
+                    self.notify_user("Saved manual hook applied.", level='success')
                     self.auto_hook_pending = False
                     self.auto_hook_data = None
                     
@@ -1339,11 +1861,11 @@ class ModernTextractorGUI:
                         
                         if best_match_id:
                             matched_hook_id = best_match_id
-                            self.append_output(f"🎯 Matched hook by text sample (multiple hooks with same function)\n")
+                            self.append_event(f"🎯 Matched hook by text sample (multiple hooks with same function)\n")
                         else:
                             # Fallback: use saved hook ID anyway
                             matched_hook_id = saved_hook_id
-                            self.append_output(f"⚠️ Multiple hooks with same function - using saved ID\n")
+                            self.append_event(f"⚠️ Multiple hooks with same function - using saved ID\n")
                     else:
                         matched_hook_id = saved_hook_id
                 
@@ -1356,7 +1878,7 @@ class ModernTextractorGUI:
                     
                     if len(hooks_with_function) == 1:
                         matched_hook_id = hooks_with_function[0]
-                        self.append_output(f"🔍 Matched hook by function name\n")
+                        self.append_event(f"🔍 Matched hook by function name\n")
                     elif len(hooks_with_function) > 1 and saved_text_sample:
                         # Use text sample to find correct hook
                         for hook_id in hooks_with_function:
@@ -1366,7 +1888,7 @@ class ModernTextractorGUI:
                                     text_clean = hook_text.strip()[:100]
                                     if saved_text_sample in text_clean or text_clean in saved_text_sample:
                                         matched_hook_id = hook_id
-                                        self.append_output(f"🎯 Matched hook by text sample\n")
+                                        self.append_event(f"🎯 Matched hook by text sample\n")
                                         break
                             if matched_hook_id:
                                 break
@@ -1381,16 +1903,18 @@ class ModernTextractorGUI:
                         
                         # Only show messages if not in silent launch  mode
                         if not self.silent_auto_launch:
-                            self.append_output(f"✓ Auto-selected Hook {matched_hook_id}\n")
-                            self.append_output(f"Function: {saved_function}\n")
-                            self.append_output("─" * 50 + "\n\n")
+                            self.append_event(f"✓ Auto-selected Hook {matched_hook_id}\n")
+                            self.append_event(f"Function: {saved_function}\n")
+                            self.append_event("─" * 50 + "\n\n")
                         else:
                             # Silent mode - just show brief success message
-                            self.append_output(f"✓ Game ready! Text extraction active.\n\n")
+                            self.append_event(f"✓ Game ready! Text extraction active.\n\n")
                         
                         self.auto_hook_pending = False
                         self.auto_hook_data = None
                         self.silent_auto_launch = False  # Reset silent mode flag
+                        self.update_hook_status_panel(f"auto-selected hook {matched_hook_id}")
+                        self.notify_user(f"Auto-selected hook {matched_hook_id}.", level='success')
                         if hasattr(self, '_auto_hook_scheduled'):
                             delattr(self, '_auto_hook_scheduled')
                         
@@ -1402,17 +1926,19 @@ class ModernTextractorGUI:
                         self._auto_hook_retry_count += 1
                         # Only show retry messages if not in silent mode
                         if not self.silent_auto_launch:
-                            self.append_output(f"🔄 Hook not found yet, retrying in 5 seconds... (Attempt {self._auto_hook_retry_count + 1}/4)\n")
+                            self.append_event(f"🔄 Hook not found yet, retrying in 5 seconds... (Attempt {self._auto_hook_retry_count + 1}/4)\n")
                         self.root.after(5000, self.attempt_auto_hook)
                     else:
                         # All retries exhausted
                         if not self.silent_auto_launch:
-                            self.append_output(f"⚠️ Could not find matching hook after multiple attempts - please select manually\n\n")
+                            self.append_event(f"⚠️ Could not find matching hook after multiple attempts - please select manually\n\n")
                         else:
-                            self.append_output(f"⚠️ Auto-hook failed - please select hook manually from the list above.\n\n")
+                            self.append_event(f"⚠️ Auto-hook failed - please select hook manually from the list above.\n\n")
                         self.auto_hook_pending = False
                         self.auto_hook_data = None
                         self.silent_auto_launch = False  # Reset silent mode flag
+                        self.update_hook_status_panel("auto-hook failed")
+                        self.notify_user("Saved hook was not found automatically.", level='warning')
                         if hasattr(self, '_auto_hook_scheduled'):
                             delattr(self, '_auto_hook_scheduled')
                     
@@ -1442,8 +1968,8 @@ class ModernTextractorGUI:
             subprocess.Popen([str(exe_path)], shell=True)
             
             # Show notification in output
-            self.append_output(f"🚀 Launching: {exe_path.name}\n")
-            self.append_output("⏳ Waiting for process to start...\n\n")
+            self.append_event(f"🚀 Launching: {exe_path.name}\n")
+            self.append_event("⏳ Waiting for process to start...\n\n")
             
             # Start a thread to monitor and auto-attach
             def monitor_and_attach():
@@ -1466,7 +1992,7 @@ class ModernTextractorGUI:
                                     def attach_to_game():
                                         # Check if already attached
                                         if self.attached_pid:
-                                            self.append_output("⚠️ Already attached to a process. Detaching first...\n")
+                                            self.append_event("⚠️ Already attached to a process. Detaching first...\n")
                                             self.detach_process()
                                             time.sleep(0.5)
                                         
@@ -1484,8 +2010,8 @@ class ModernTextractorGUI:
                                         # Wait a bit to ensure the UI is updated and selection is properly set
                                         def perform_attach():
                                             self.attach_process()
-                                            self.append_output(f"✓ Process launched and attached successfully!\n")
-                                            self.append_output(f"⏳ Please interact with the application to capture text...\n\n")
+                                            self.append_event(f"✓ Process launched and attached successfully!\n")
+                                            self.append_event(f"⏳ Please interact with the application to capture text...\n\n")
                                         
                                         # Delay attachment by 2 seconds to ensure UI is ready
                                         self.root.after(2000, perform_attach)
@@ -1501,7 +2027,7 @@ class ModernTextractorGUI:
                     time.sleep(1)
                 
                 # If we get here, process was not found
-                self.root.after(0, lambda: self.append_output(
+                self.root.after(0, lambda: self.append_event(
                     "⚠️ Could not find process after 30 seconds.\n"
                     "   Please attach manually if the application is running.\n\n"
                 ))
@@ -1623,7 +2149,7 @@ class ModernTextractorGUI:
                 for widget in title_frame.winfo_children():
                     if isinstance(widget, ttk.Label) and 'Total profiles' in str(widget.cget('text')):
                         widget.config(text=f"Total profiles: {len(self.game_profiles)}")
-                messagebox.showinfo("Success", "Profile deleted.")
+                self.notify_user("Profile deleted.", level='success')
         
         def launch_game():
             """Launch the selected game and auto-attach"""
@@ -1655,7 +2181,7 @@ class ModernTextractorGUI:
                 
                 # Switch to the saved engine if different from current
                 if saved_engine != self.current_engine:
-                    self.append_output(f"🔄 Switching to {saved_engine} engine for this game...\n")
+                    self.append_event(f"🔄 Switching to {saved_engine} engine for this game...\n")
                     self.current_engine = saved_engine
                     self.engine_var.set(saved_engine)
                 
@@ -1666,9 +2192,9 @@ class ModernTextractorGUI:
                 subprocess.Popen([exe_path], shell=True)
                 
                 # Show notification in output
-                self.append_output(f"🚀 Launching game: {game_name}\n")
-                self.append_output("⏳ Waiting for process to start and auto-hook...\n\n")
-                self.append_output("⏳ Wait around 3-5 seconds after the game is launched then you should see further updates...\n\n")
+                self.append_event(f"🚀 Launching game: {game_name}\n")
+                self.append_event("⏳ Waiting for process to start and auto-hook...\n\n")
+                self.append_event("⏳ Wait around 3-5 seconds after the game is launched then you should see further updates...\n\n")
                 
                 # Start a thread to monitor and auto-attach
                 def monitor_and_attach():
@@ -1691,7 +2217,7 @@ class ModernTextractorGUI:
                                         def attach_to_game():
                                             # Check if already attached
                                             if self.attached_pid:
-                                                self.append_output("⚠️ Already attached to a process. Detaching first...\n")
+                                                self.append_event("⚠️ Already attached to a process. Detaching first...\n")
                                                 self.detach_process()
                                                 time.sleep(0.5)
                                             
@@ -1710,9 +2236,9 @@ class ModernTextractorGUI:
                                             # This prevents "No Selection" errors
                                             def perform_attach():
                                                 self.attach_process()
-                                                self.append_output(f"✓ Game launched and attached successfully!\n")
-                                                self.append_output(f"⏳ Please start the game and click on a dialogue or two and wait a bit...\n\n")
-                                                self.append_output(f"⏳ Game hook will automatically be applied after that...\n\n")
+                                                self.append_event(f"✓ Game launched and attached successfully!\n")
+                                                self.append_event(f"⏳ Please start the game and click on a dialogue or two and wait a bit...\n\n")
+                                                self.append_event(f"⏳ Game hook will automatically be applied after that...\n\n")
 
                                             # Delay attachment by 4 second to ensure UI is ready
                                             self.root.after(4000, perform_attach)
@@ -1728,7 +2254,7 @@ class ModernTextractorGUI:
                         time.sleep(1)
                     
                     # If we get here, process was not found
-                    self.root.after(0, lambda: self.append_output(
+                    self.root.after(0, lambda: self.append_event(
                         "⚠️ Could not find game process after 30 seconds.\n"
                         "   Please attach manually if the game is running.\n\n"
                     ))
@@ -1757,7 +2283,7 @@ class ModernTextractorGUI:
                 for widget in title_frame.winfo_children():
                     if isinstance(widget, ttk.Label) and 'Total profiles' in str(widget.cget('text')):
                         widget.config(text=f"Total profiles: 0")
-                messagebox.showinfo("Success", "All profiles cleared.")
+                self.notify_user("All profiles cleared.", level='success')
         
         ttk.Button(btn_container, text="🚀 Launch Game", 
                   command=launch_game,
@@ -1863,6 +2389,17 @@ class ModernTextractorGUI:
                     "background": [("active", self.colors['border'])]
                 }
             },
+            "Disclosure.TButton": {
+                "configure": {
+                    "background": self.colors['surface_light'],
+                    "foreground": self.colors['fg'],
+                    "padding": (5, 2),
+                    "font": ('Segoe UI', 10, 'bold')
+                },
+                "map": {
+                    "background": [("active", self.colors['border'])]
+                }
+            },
             "Danger.TButton": {
                 "configure": {
                     "background": self.colors['secondary'],
@@ -1962,77 +2499,61 @@ class ModernTextractorGUI:
             pass
         
     def setup_ui(self):
-        """Create the modern GUI layout"""
-        # Create a canvas with scrollbar for the entire content
-        canvas = tk.Canvas(self.root, bg=self.colors['bg'], highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
-        
-        # Main container inside canvas
-        main_container = ttk.Frame(canvas, style="TFrame")
-        
-        # Configure canvas
+        """Create the modern GUI layout with a fixed header and scrollable content area."""
+        header_frame = ttk.Frame(self.root, style="TFrame", padding=(15, 15, 15, 0))
+        header_frame.pack(fill=tk.X)
+
+        canvas_shell = ttk.Frame(self.root, style="TFrame")
+        canvas_shell.pack(fill=tk.BOTH, expand=True, padx=15, pady=(10, 0))
+
+        canvas = tk.Canvas(canvas_shell, bg=self.colors['bg'], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(canvas_shell, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Pack canvas first (scrollbar will be managed dynamically)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15, pady=(15, 0))
-        
-        # Create window in canvas
-        canvas_frame = canvas.create_window((0, 0), window=main_container, anchor="nw")
-        
-        # Store references for scrollbar management
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        main_container = ttk.Frame(canvas, style="TFrame", padding=(15, 15, 15, 0))
+        canvas_window = canvas.create_window((0, 0), window=main_container, anchor="nw")
+
         self.canvas = canvas
         self.scrollbar = scrollbar
-        self.scrollbar_visible = False
-        
-        # Configure canvas scrolling
-        def configure_scroll_region(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            # Check if scrollbar is needed
-            update_scrollbar_visibility()
-        
-        def configure_canvas_width(event):
-            canvas.itemconfig(canvas_frame, width=event.width)
-            update_scrollbar_visibility()
-        
-        def update_scrollbar_visibility():
-            # In fullscreen mode, never show scrollbar
-            if self.is_fullscreen:
+        self.canvas_shell = canvas_shell
+        self.scrollbar_visible = True
+
+        def configure_scroll_region(event=None):
+            bbox = canvas.bbox("all")
+            if not bbox:
+                canvas.configure(scrollregion=(0, 0, 0, 0))
                 if self.scrollbar_visible:
                     scrollbar.pack_forget()
                     self.scrollbar_visible = False
                 return
-            
-            # Get the canvas and content dimensions
-            canvas.update_idletasks()
-            bbox = canvas.bbox("all")
-            if bbox:
-                content_height = bbox[3] - bbox[1]
-                canvas_height = canvas.winfo_height()
-                
-                # Show scrollbar only if content is larger than canvas
-                if content_height > canvas_height and not self.scrollbar_visible:
-                    scrollbar.pack(side=tk.RIGHT, fill=tk.Y, before=canvas)
-                    self.scrollbar_visible = True
-                elif content_height <= canvas_height and self.scrollbar_visible:
+
+            x1, y1, x2, y2 = bbox
+            content_height = max(0, y2 - y1)
+            viewport_height = max(1, canvas.winfo_height())
+            canvas.configure(scrollregion=(x1, y1, x2, y2))
+
+            needs_scrollbar = content_height > viewport_height + 1
+            if needs_scrollbar and not self.scrollbar_visible:
+                scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+                self.scrollbar_visible = True
+            elif not needs_scrollbar:
+                if self.scrollbar_visible:
                     scrollbar.pack_forget()
                     self.scrollbar_visible = False
-        
+                canvas.yview_moveto(0)
+
+        def configure_canvas_width(event):
+            canvas.itemconfigure(canvas_window, width=event.width)
+            configure_scroll_region()
+
         main_container.bind("<Configure>", configure_scroll_region)
         canvas.bind("<Configure>", configure_canvas_width)
-        
-        # Enable mousewheel scrolling only when scrollbar is visible and not in fullscreen
-        def on_mousewheel(event):
-            if self.scrollbar_visible and not self.is_fullscreen:
-                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
-        canvas.bind_all("<MouseWheel>", on_mousewheel)
-        
-        # Store update function for later use
-        self.update_scrollbar_visibility = update_scrollbar_visibility
+        self.update_scrollbar_visibility = configure_scroll_region
+        self.bind_vertical_mousewheel(canvas)
         
         # Header
-        header_frame = ttk.Frame(main_container)
-        header_frame.pack(fill=tk.X, pady=(0, 5))
         
         title_label = ttk.Label(header_frame, text="✨ Sugoi Hook", 
                                font=('Segoe UI', 20, 'bold'),
@@ -2064,21 +2585,25 @@ class ModernTextractorGUI:
                                         command=self.on_engine_change)
         engine_radio2.pack(side=tk.LEFT)
         
-        # Content area with grid - adjusted for better space distribution
+        # Content area with a responsive selection row
         content_frame = ttk.Frame(main_container)
         content_frame.pack(fill=tk.BOTH, expand=True)
         content_frame.columnconfigure(0, weight=1)
-        content_frame.rowconfigure(0, weight=0)  # Process card - fixed height
-        content_frame.rowconfigure(1, weight=0)  # Hook card - fixed height
-        content_frame.rowconfigure(2, weight=0)  # Plugins card - fixed height
-        content_frame.rowconfigure(3, weight=1)  # Output card - expandable
-        content_frame.rowconfigure(4, weight=0)  # Footer - fixed height
+        content_frame.rowconfigure(0, weight=0)  # Process + Hook selection area
+        content_frame.rowconfigure(1, weight=0)  # Plugins card
+        content_frame.rowconfigure(2, weight=1)  # Output card
+
+        self.selection_cards_frame = ttk.Frame(content_frame)
+        self.selection_cards_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 12))
+        self.selection_cards_frame.columnconfigure(0, weight=1)
+        self.selection_cards_frame.columnconfigure(1, weight=1)
         
         # === PROCESS SELECTION CARD ===
-        self.create_process_card(content_frame)
+        self.create_process_card(self.selection_cards_frame)
         
         # === HOOK SELECTION CARD ===
-        self.create_hook_card(content_frame)
+        self.create_hook_card(self.selection_cards_frame)
+        self.update_selection_cards_layout()
         
         # === PLUGINS CARD ===
         self.create_plugins_card(content_frame)
@@ -2086,45 +2611,170 @@ class ModernTextractorGUI:
         # === TEXT OUTPUT CARD ===
         self.create_output_card(content_frame)
         
-        # === FOOTER ===
-        self.create_footer(content_frame)
+
+        self.configure_mousewheel_routing(main_container)
         
+    def bind_vertical_mousewheel(self, widget):
+        """Bind mouse wheel scrolling to a specific widget only."""
+        widget.bind("<MouseWheel>", lambda event, target=widget: self.on_mousewheel_scroll(event, target))
+
+    def bind_page_mousewheel(self, widget):
+        """Bind mouse wheel scrolling to the page scrollbar for non-scrollable widgets."""
+        widget.bind("<MouseWheel>", lambda event: self.on_mousewheel_scroll(event, self.canvas) if self.canvas else None)
+
+    def configure_mousewheel_routing(self, widget):
+        """Route wheel input to local scrollable widgets or the page fallback elsewhere."""
+        local_scroll_widgets = {
+            getattr(self, 'process_tree', None),
+            getattr(self, 'hook_tree', None),
+            getattr(self, 'plugins_tree', None),
+            getattr(self, 'event_text', None),
+            getattr(self, 'output_text', None),
+            self.canvas,
+        }
+
+        if widget not in local_scroll_widgets:
+            self.bind_page_mousewheel(widget)
+
+        for child in widget.winfo_children():
+            self.configure_mousewheel_routing(child)
+
+    def on_mousewheel_scroll(self, event, widget):
+        """Scroll only the intended widget."""
+        try:
+            widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            return "break"
+        except Exception:
+            return None
+
+    def create_section_header(self, parent, section_key, title_text, title_style="Title.TLabel"):
+        """Create a reusable section header with a left-side collapse toggle."""
+        header_frame = ttk.Frame(parent)
+        header_frame.columnconfigure(1, weight=1)
+
+        toggle_btn = ttk.Button(
+            header_frame,
+            text="▾",
+            style="Disclosure.TButton",
+            command=lambda key=section_key: self.toggle_section(key)
+        )
+        toggle_btn.grid(row=0, column=0, sticky=tk.W, padx=(2, 2))
+        setattr(self, f"{section_key}_toggle_btn", toggle_btn)
+
+        ttk.Label(header_frame, text=title_text, style=title_style).grid(row=0, column=1, sticky=tk.W)
+        return header_frame
+
+    def toggle_section(self, section_key, collapsed=None):
+        """Show or hide a section body and update its disclosure button."""
+        body_attr = f"{section_key}_body_frame"
+        toggle_attr = f"{section_key}_toggle_btn"
+        state_attr = f"{section_key}_section_collapsed"
+
+        if not hasattr(self, body_attr) or not hasattr(self, toggle_attr):
+            return
+
+        if collapsed is None:
+            collapsed = not getattr(self, state_attr)
+
+        body = getattr(self, body_attr)
+        toggle_btn = getattr(self, toggle_attr)
+
+        setattr(self, state_attr, collapsed)
+        if collapsed:
+            body.grid_remove()
+            toggle_btn.config(text="▸")
+        else:
+            body.grid()
+            toggle_btn.config(text="▾")
+
+        if section_key in ('process', 'hook'):
+            self.update_selection_cards_layout()
+
+        if hasattr(self, 'update_scrollbar_visibility'):
+            self.root.after(50, self.update_scrollbar_visibility)
+
+        if section_key in ('process', 'hook', 'plugins'):
+            if self.is_compact_window_layout():
+                self.root.after(80, self.restore_compact_window_geometry)
+            elif not collapsed:
+                self.root.after(80, self.restore_full_window_geometry)
+
+    def toggle_process_section(self, collapsed=None):
+        """Compatibility wrapper for the generalized section toggle."""
+        self.toggle_section('process', collapsed)
+
+    def toggle_hook_section(self, collapsed=None):
+        """Compatibility wrapper for the generalized section toggle."""
+        self.toggle_section('hook', collapsed)
+
+    def update_selection_cards_layout(self):
+        """Lay out Process and Hook cards side by side only when both are collapsed."""
+        if not hasattr(self, 'process_card') or not hasattr(self, 'hook_card'):
+            return
+        if not hasattr(self, 'selection_cards_frame'):
+            return
+
+        both_collapsed = self.process_section_collapsed and self.hook_section_collapsed
+
+        if both_collapsed:
+            self.process_card.grid_configure(row=0, column=0, columnspan=1, padx=(0, 6), pady=(0, 0), sticky=(tk.W, tk.E, tk.N, tk.S))
+            self.hook_card.grid_configure(row=0, column=1, columnspan=1, padx=(6, 0), pady=(0, 0), sticky=(tk.W, tk.E, tk.N, tk.S))
+        else:
+            self.process_card.grid_configure(row=0, column=0, columnspan=2, padx=(0, 0), pady=(0, 12), sticky=(tk.W, tk.E, tk.N, tk.S))
+            self.hook_card.grid_configure(row=1, column=0, columnspan=2, padx=(0, 0), pady=(0, 0), sticky=(tk.W, tk.E, tk.N, tk.S))
+
     def create_process_card(self, parent):
         """Create the process selection card"""
         card = ttk.Frame(parent, style="Card.TFrame", padding=12)
-        card.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        self.process_card = card
+        card.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 12), padx=(0, 6))
         card.columnconfigure(0, weight=1)
         
         # Card header
-        header = ttk.Frame(card)
-        header.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 7))
+        header = self.create_section_header(card, 'process', "🎮 1. Select Process")
+        header.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 6))
+        header.columnconfigure(2, weight=0)
+
+        self.process_header_spacer = ttk.Button(
+            header,
+            text="",
+            style="TButton",
+            state='disabled'
+        )
+        self.process_header_spacer.grid(row=0, column=2, sticky=tk.E)
+
+        self.process_body_frame = ttk.Frame(card)
+        self.process_body_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self.process_body_frame.columnconfigure(0, weight=1)
         
-        ttk.Label(header, text="🎮 1. Select Process", style="Title.TLabel").pack(side=tk.LEFT)
-        
-        # Search and refresh
-        search_frame = ttk.Frame(card)
-        search_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
+        # Toolbar row
+        toolbar_frame = ttk.Frame(self.process_body_frame)
+        toolbar_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
+
+        ttk.Button(toolbar_frame, text="🔄 Refresh", command=self.refresh_processes,
+                  style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 5))
+
+        ttk.Button(toolbar_frame, text="📂 Browse for EXE", 
+                  command=self.browse_and_attach_exe,
+                  style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 5))
+
+        ttk.Button(toolbar_frame, text="💾 Game Profiles", 
+                  command=self.open_profile_manager,
+                  style="Secondary.TButton").pack(side=tk.LEFT)
+
+        # Search row
+        search_frame = ttk.Frame(self.process_body_frame)
+        search_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 6))
         search_frame.columnconfigure(0, weight=1)
         
         self.search_var = tk.StringVar()
         search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
-        search_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 10))
+        search_entry.grid(row=0, column=0, sticky=(tk.W, tk.E))
         search_entry.insert(0, "🔍 Search processes...")
         search_entry.bind('<FocusIn>', lambda e: search_entry.delete(0, tk.END) if search_entry.get() == "🔍 Search processes..." else None)
         
-        ttk.Button(search_frame, text="🔄 Refresh", command=self.refresh_processes,
-                  style="Secondary.TButton").grid(row=0, column=1, padx=(0, 5))
-
-        ttk.Button(search_frame, text="📂 Browse for EXE", 
-                  command=self.browse_and_attach_exe,
-                  style="Secondary.TButton").grid(row=0, column=2, padx=(0, 5))
-
-        ttk.Button(search_frame, text="💾 Game Profiles", 
-                  command=self.open_profile_manager,
-                  style="Secondary.TButton").grid(row=0, column=3)
-        
         # Process list
-        list_frame = ttk.Frame(card)
+        list_frame = ttk.Frame(self.process_body_frame)
         list_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
@@ -2137,10 +2787,10 @@ class ModernTextractorGUI:
         self.process_tree.heading('arch', text='Arch')
         self.process_tree.heading('name', text='Process Name')
         
-        self.process_tree.column('#0', width=self.scale(40), anchor='center', stretch=False)
-        self.process_tree.column('pid', width=self.scale(70), anchor='center')
-        self.process_tree.column('arch', width=self.scale(60), anchor='center')
-        self.process_tree.column('name', width=self.scale(400), anchor='center')
+        self.process_tree.column('#0', width=self.scale(28), anchor='center', stretch=False)
+        self.process_tree.column('pid', width=self.scale(58), minwidth=self.scale(52), anchor='center', stretch=False)
+        self.process_tree.column('arch', width=self.scale(52), minwidth=self.scale(48), anchor='center', stretch=False)
+        self.process_tree.column('name', width=self.scale(320), minwidth=self.scale(180), anchor='w', stretch=True)
         
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.process_tree.yview)
         self.process_tree.configure(yscrollcommand=scrollbar.set)
@@ -2153,31 +2803,107 @@ class ModernTextractorGUI:
         
         # Enable double-click to attach
         self.process_tree.bind('<Double-Button-1>', lambda e: self.attach_process())
+        self.bind_vertical_mousewheel(self.process_tree)
         
         # Action buttons
         action_frame = ttk.Frame(card)
-        action_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
-        
+        action_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
+        action_frame.columnconfigure(0, weight=1)
+
         self.status_label = ttk.Label(action_frame, text="● Not attached", 
                                       style="Status.TLabel",
                                       foreground=self.colors['text_dim'])
-        self.status_label.pack(side=tk.LEFT)
-        
-        # Keep attach_btn reference for state management (hidden)
-        self.attach_btn = None
+        self.status_label.grid(row=0, column=0, sticky=tk.W)
+
+        self.detach_btn = ttk.Button(
+            action_frame,
+            text="⏹️ Detach",
+            command=self.detach_process,
+            style="Danger.TButton",
+            state='disabled'
+        )
+        self.detach_btn.grid(row=0, column=1, sticky=tk.E, padx=(0, 8))
+
+        self.attach_btn = ttk.Button(
+            action_frame,
+            text="➡️ Attach Selected",
+            command=self.attach_process,
+            style="TButton"
+        )
+        self.attach_btn.grid(row=0, column=2, sticky=tk.E)
         
     def create_hook_card(self, parent):
         """Create the hook selection card"""
         card = ttk.Frame(parent, style="Card.TFrame", padding=12)
-        card.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        self.hook_card = card
+        card.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 12), padx=(6, 0))
         card.columnconfigure(0, weight=1)
         
         # Card header
-        ttk.Label(card, text="🎯 2. Select Hook", style="Title.TLabel").grid(row=0, column=0, sticky=tk.W, pady=(0, 4))
+        header_frame = self.create_section_header(card, 'hook', "🎯 2. Select Hook")
+        header_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 6))
+        header_frame.columnconfigure(2, weight=0)
+
+        self.select_hook_btn = ttk.Button(
+            header_frame,
+            text="✅ Use Selected Hook",
+            command=self.select_hook,
+            style="TButton",
+            state='disabled'
+        )
+        self.select_hook_btn.grid(row=0, column=2, sticky=tk.E)
+
+        status_frame = ttk.Frame(card)
+        status_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 6))
+        status_frame.columnconfigure(0, weight=1)
+
+        self.hook_status_summary = ttk.Label(
+            status_frame,
+            text="Not attached | Engine: Luna",
+            style="Status.TLabel",
+            foreground=self.colors['text_dim']
+        )
+        self.hook_status_summary.grid(row=0, column=0, sticky=tk.W)
+
+        self.hook_active_label = ttk.Label(
+            status_frame,
+            text="Current hook: none selected",
+            style="Status.TLabel",
+            foreground=self.colors['text_dim']
+        )
+        self.hook_active_label.grid(row=1, column=0, sticky=tk.W)
+
+        self.hook_concat_label = ttk.Label(
+            status_frame,
+            text="Concatenation: inactive",
+            style="Status.TLabel",
+            foreground=self.colors['text_dim']
+        )
+        self.hook_concat_label.grid(row=2, column=0, sticky=tk.W)
+
+        self.hook_profile_label = ttk.Label(
+            status_frame,
+            text="Saved profile: none",
+            style="Status.TLabel",
+            foreground=self.colors['text_dim']
+        )
+        self.hook_profile_label.grid(row=3, column=0, sticky=tk.W)
+
+        self.hook_last_action_label = ttk.Label(
+            status_frame,
+            text="Last action: waiting for attachment",
+            style="Status.TLabel",
+            foreground=self.colors['text_dim']
+        )
+        self.hook_last_action_label.grid(row=4, column=0, sticky=tk.W)
+
+        self.hook_body_frame = ttk.Frame(card)
+        self.hook_body_frame.grid(row=2, column=0, sticky=(tk.W, tk.E))
+        self.hook_body_frame.columnconfigure(0, weight=1)
         
         # Hook list
-        list_frame = ttk.Frame(card)
-        list_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        list_frame = ttk.Frame(self.hook_body_frame)
+        list_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
         
@@ -2188,22 +2914,25 @@ class ModernTextractorGUI:
         self.hook_tree.heading('function', text='Function')
         self.hook_tree.heading('preview', text='Text Preview')
         
-        self.hook_tree.column('id', width=self.scale(60), minwidth=self.scale(60), anchor='center', stretch=False)
-        self.hook_tree.column('function', width=self.scale(200), minwidth=self.scale(150), anchor='center', stretch=False)
-        self.hook_tree.column('preview', width=self.scale(500), minwidth=self.scale(300), anchor='center', stretch=True)
+        self.hook_tree.column('id', width=self.scale(44), minwidth=self.scale(40), anchor='center', stretch=False)
+        self.hook_tree.column('function', width=self.scale(210), minwidth=self.scale(140), anchor='w', stretch=False)
+        self.hook_tree.column('preview', width=self.scale(520), minwidth=self.scale(260), anchor='w', stretch=True)
         
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.hook_tree.yview)
-        self.hook_tree.configure(yscrollcommand=scrollbar.set)
+        h_scrollbar = ttk.Scrollbar(list_frame, orient=tk.HORIZONTAL, command=self.hook_tree.xview)
+        self.hook_tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=h_scrollbar.set)
         
         self.hook_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        h_scrollbar.grid(row=1, column=0, sticky=(tk.W, tk.E))
         
         # Enable double-click to select hook
         self.hook_tree.bind('<Double-Button-1>', lambda e: self.select_hook())
+        self.bind_vertical_mousewheel(self.hook_tree)
         
         # Manual hook input section
-        manual_hook_frame = ttk.Frame(card)
-        manual_hook_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(8, 0))
+        manual_hook_frame = ttk.Frame(self.hook_body_frame)
+        manual_hook_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(8, 0))
         manual_hook_frame.columnconfigure(1, weight=1)
         
         ttk.Label(manual_hook_frame, text="Manual Hook:", 
@@ -2229,26 +2958,24 @@ class ModernTextractorGUI:
                              style="Secondary.TButton",
                              width=3)
         help_btn.grid(row=0, column=3, padx=(5, 0))
-        
-        # Keep select_hook_btn reference for state management (hidden)
-        self.select_hook_btn = None
+
+        self.hook_tree.bind('<<TreeviewSelect>>', lambda e: self.update_hook_action_state())
+        self.update_hook_status_panel()
+        self.update_hook_action_state()
         
     def create_plugins_card(self, parent):
         """Create the plugins management card"""
         card = ttk.Frame(parent, style="Card.TFrame", padding=12)
-        card.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        card.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
         card.columnconfigure(0, weight=1)
         
         # Card header
-        header_frame = ttk.Frame(card)
+        header_frame = self.create_section_header(card, 'plugins', "🔌 Plugins")
         header_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
-        header_frame.columnconfigure(1, weight=1)
-        
-        ttk.Label(header_frame, text="🔌 Plugins (optional)", style="Title.TLabel").grid(row=0, column=0, sticky=tk.W)
         
         # Plugin action buttons
         btn_frame = ttk.Frame(header_frame)
-        btn_frame.grid(row=0, column=1, sticky=tk.E)
+        btn_frame.grid(row=0, column=2, sticky=tk.E)
         
         # Show active plugins count
         self.plugins_count_label = ttk.Label(btn_frame, 
@@ -2266,14 +2993,36 @@ class ModernTextractorGUI:
                   command=self.reload_plugins,
                   style="Secondary.TButton").pack(side=tk.LEFT)
         
+        self.plugins_body_frame = ttk.Frame(card)
+        self.plugins_body_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.plugins_body_frame.columnconfigure(0, weight=1)
+
+        controls_frame = ttk.Frame(self.plugins_body_frame)
+        controls_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
+
+        self.plugin_toggle_btn = ttk.Button(controls_frame, text="Toggle Active", command=self.toggle_selected_plugin, style="Secondary.TButton")
+        self.plugin_toggle_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.plugin_configure_btn = ttk.Button(controls_frame, text="Configure", command=self.configure_selected_plugin, style="Secondary.TButton")
+        self.plugin_configure_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.plugin_move_up_btn = ttk.Button(controls_frame, text="Move Up", command=lambda: self.move_selected_plugin(-1), style="Secondary.TButton")
+        self.plugin_move_up_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.plugin_move_down_btn = ttk.Button(controls_frame, text="Move Down", command=lambda: self.move_selected_plugin(1), style="Secondary.TButton")
+        self.plugin_move_down_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.plugin_controls_hint = ttk.Label(controls_frame, text="Tip: Use buttons for precise ordering. Drag still works.", style="Status.TLabel", foreground=self.colors['text_dim'])
+        self.plugin_controls_hint.pack(side=tk.RIGHT)
+
         # Plugins list
-        list_frame = ttk.Frame(card)
+        list_frame = ttk.Frame(self.plugins_body_frame)
         list_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
         
         columns = ('status', 'name', 'version', 'description', 'actions')
-        self.plugins_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=3)
+        self.plugins_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=7)
         self.plugins_tree.heading('status', text='Status')
         self.plugins_tree.heading('name', text='Plugin Name')
         self.plugins_tree.heading('version', text='Version')
@@ -2305,8 +3054,13 @@ class ModernTextractorGUI:
         self.plugins_tree.bind('<B1-Motion>', self.on_plugin_drag_motion)
         self.plugins_tree.bind('<ButtonRelease-1>', self.on_plugin_drag_release)
         
+        self.plugins_tree.bind('<<TreeviewSelect>>', lambda e: self.update_plugin_action_buttons())
+        self.bind_vertical_mousewheel(self.plugins_tree)
+
         # Populate the plugins list
         self.refresh_plugins_list()
+        self.toggle_section('plugins', self.plugins_section_collapsed)
+        self.update_plugin_action_buttons()
     
     def on_plugin_click(self, event):
         """Handle clicks on plugin tree, especially on Actions column"""
@@ -2379,6 +3133,7 @@ class ModernTextractorGUI:
     
     def reload_plugins(self):
         """Reload all plugins from the plugins folder"""
+        self.shutdown_plugin_instances()
         self.plugins.clear()
         self.discover_plugins()
         self.refresh_plugins_list()
@@ -2390,34 +3145,72 @@ class ModernTextractorGUI:
     def create_output_card(self, parent):
         """Create the text output card"""
         card = ttk.Frame(parent, style="Card.TFrame", padding=12)
-        card.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 15))
+        card.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 15))
         card.columnconfigure(0, weight=1)
         card.rowconfigure(1, weight=1)
         
         # Card header
-        header_frame = ttk.Frame(card)
+        header_frame = self.create_section_header(card, 'output', "📝 Session Output")
         header_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-        header_frame.columnconfigure(1, weight=1)
-        
-        ttk.Label(header_frame, text="📝 Extracted Text", style="Title.TLabel").grid(row=0, column=0, sticky=tk.W)
         
         # Action buttons
         action_frame = ttk.Frame(header_frame)
-        action_frame.grid(row=0, column=1, sticky=tk.E)
+        action_frame.grid(row=0, column=2, sticky=tk.E)
         
         ttk.Button(action_frame, text="💾 Save to File", 
                   command=self.save_to_file,
+                  style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(action_frame, text="🗑️ Clear", 
+                  command=self.clear_output,
                   style="Secondary.TButton").pack(side=tk.LEFT)
         
-        # Text output frame to ensure proper scrolling
-        text_frame = ttk.Frame(card)
-        text_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        text_frame.columnconfigure(0, weight=1)
-        text_frame.rowconfigure(0, weight=1)
-        
-        # Text output with explicit scrollbar configuration
+        self.output_body_frame = ttk.Frame(card)
+        self.output_body_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.output_body_frame.columnconfigure(0, weight=1)
+        self.output_body_frame.rowconfigure(1, weight=1)
+        self.output_body_frame.rowconfigure(3, weight=1)
+
+        events_header = self.create_section_header(self.output_body_frame, 'events', "Session Events", title_style="Status.TLabel")
+        events_header.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
+
+        self.events_body_frame = ttk.Frame(self.output_body_frame)
+        self.events_body_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        self.events_body_frame.columnconfigure(0, weight=1)
+        self.events_body_frame.rowconfigure(0, weight=1)
+
+        self.event_text = tk.Text(
+            self.events_body_frame,
+            wrap=tk.WORD,
+            bg=self.colors['bg'],
+            fg=self.colors['text_dim'],
+            insertbackground=self.colors['primary'],
+            selectbackground=self.colors['primary'],
+            selectforeground=self.colors['bg'],
+            font=('Consolas', 9),
+            borderwidth=0,
+            padx=10,
+            pady=8,
+            state='disabled',
+            height=1
+        )
+        self.event_scrollbar = ttk.Scrollbar(self.events_body_frame, orient=tk.VERTICAL, command=self.event_text.yview)
+        self.event_text.configure(yscrollcommand=self.event_scrollbar.set)
+        self.event_text.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        self.event_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.event_scrollbar.grid_remove()
+        self.event_text_default_height = 1
+        self.bind_vertical_mousewheel(self.event_text)
+
+        extracted_header = self.create_section_header(self.output_body_frame, 'extracted', "Extracted Text", title_style="Status.TLabel")
+        extracted_header.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
+
+        self.extracted_body_frame = ttk.Frame(self.output_body_frame)
+        self.extracted_body_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.extracted_body_frame.columnconfigure(0, weight=1)
+        self.extracted_body_frame.rowconfigure(0, weight=1)
+
         self.output_text = scrolledtext.ScrolledText(
-            text_frame, wrap=tk.WORD,
+            self.extracted_body_frame, wrap=tk.WORD,
             bg=self.colors['bg'],
             fg=self.colors['fg'],
             insertbackground=self.colors['primary'],
@@ -2427,15 +3220,16 @@ class ModernTextractorGUI:
             borderwidth=0,
             padx=10, pady=10,
             state='disabled',
-            height=6
+            height=8
         )
         self.output_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.output_text_default_height = 6
-        
+        self.output_text_default_height = 8
+        self.bind_vertical_mousewheel(self.output_text)
+
     def create_footer(self, parent):
         """Create the footer with action buttons"""
         footer = ttk.Frame(parent)
-        footer.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(5,0))
+        footer.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(5,0))
         
         ttk.Button(footer, text="🗑️ Clear", command=self.clear_output,
                   style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 10))
@@ -2626,7 +3420,7 @@ class ModernTextractorGUI:
         """Attach to the selected process"""
         selection = self.process_tree.selection()
         if not selection:
-            messagebox.showwarning("No Selection", "Please select a process to attach.")
+            self.notify_user("Select a process to attach.", level='warning')
             return
         
         item = self.process_tree.item(selection[0])
@@ -2679,7 +3473,7 @@ class ModernTextractorGUI:
                                     foreground=self.colors['success'])
             
             self.detach_btn.config(state='normal')
-            self.attach_manual_hook_btn.config(state='normal')
+            self.update_hook_action_state()
             
             self.is_reading = True
             self.hooks.clear()
@@ -2687,8 +3481,13 @@ class ModernTextractorGUI:
             
             threading.Thread(target=self.read_cli_output, daemon=True).start()
             
-            self.append_output(f"✓ Attached to {name} (PID: {pid})\n")
-            self.append_output("⏳ Waiting for hooks... Please start the game and click on a dialogue.\n\n")
+            self.append_event(f"✓ Attached to {name} (PID: {pid})\n")
+            self.append_event("⏳ Waiting for hooks... Please start the game and click on a dialogue.\n\n")
+            self.update_hook_status_panel(f"attached to {name}")
+            self.notify_user(f"Attached to {name}.", level='success')
+            self.toggle_section('process', True)
+            if self.get_hook_concatenation_state().get('active'):
+                self.toggle_section('hook', True)
             
             # Check for saved game profile and prepare auto-hook
             self.check_and_load_hook_profile()
@@ -2697,18 +3496,19 @@ class ModernTextractorGUI:
             messagebox.showerror("Error", f"Failed to attach:\n{str(e)}")
             self.status_label.config(text="● Attachment failed", 
                                     foreground=self.colors['secondary'])
+            self.update_hook_status_panel("attachment failed")
     
     def attach_manual_hook(self):
         """Attach a manual hook using hook code"""
         if not self.attached_pid:
-            messagebox.showwarning("Not Attached", "Please attach to a process first.")
+            self.notify_user("Attach to a process first.", level='warning')
             return
         
         hook_code = self.manual_hook_entry.get().strip()
         
         # Check if it's the placeholder text
         if not hook_code or hook_code.startswith("e.g.,"):
-            messagebox.showwarning("Invalid Hook Code", "Please enter a valid hook code.")
+            self.notify_user("Enter a valid hook code.", level='warning')
             return
         
         # Basic validation of hook code format
@@ -2729,8 +3529,10 @@ class ModernTextractorGUI:
             self.cli_process.stdin.write(command)
             self.cli_process.stdin.flush()
             
-            self.append_output(f"🔗 Manual hook attached: {hook_code}\n")
-            self.append_output("⏳ Waiting for text output...\n\n")
+            self.append_event(f"🔗 Manual hook attached: {hook_code}\n")
+            self.append_event("⏳ Waiting for text output...\n\n")
+            self.update_hook_status_panel(f"attached manual hook {hook_code}")
+            self.notify_user("Manual hook sent. Waiting for text output.", level='success')
             
             # Save manual hook to game profile
             self.save_hook_profile(hook_code=hook_code)
@@ -2928,6 +3730,8 @@ For more information, refer to the Textractor documentation.
                     
                     # Always update the preview with the latest text (even if empty)
                     # This ensures the preview updates from "Waiting for text..." to actual content
+                    self.log_pipeline('hook.line_received', engine='textractor', hook_id=hook_id, text=text, selected=(self.selected_hook_id == hook_id), silent_auto_launch=self.silent_auto_launch)
+                    self.log_pipeline('hook.line_received', engine='luna', hook_id=hook_id, text=text, selected=(self.selected_hook_id == hook_id), silent_auto_launch=self.silent_auto_launch)
                     self.root.after(0, self.update_hook_preview, hook_id, text)
                     
                     if self.selected_hook_id and hook_id == self.selected_hook_id:
@@ -3004,7 +3808,10 @@ For more information, refer to the Textractor documentation.
     
     def add_hook_to_list(self, hook_id, function):
         """Add a hook to the hook list"""
-        self.hook_tree.insert('', tk.END, values=(hook_id, function, "Waiting for text..."))
+        function_label = self.format_hook_function_label(hook_id, function)
+        self.hook_tree.insert('', tk.END, values=(hook_id, function_label, "Waiting for text..."))
+        self.update_hook_action_state()
+        self.update_hook_status_panel()
         
         # Check if we should auto-select this hook (with longer delay to let all hooks populate)
         # Some games insert many hooks before the correct one appears
@@ -3041,14 +3848,29 @@ For more information, refer to the Textractor documentation.
                 item_values = self.hook_tree.item(item)['values']
                 # Convert both to strings for comparison to handle type mismatches
                 if str(item_values[0]) == str(hook_id):
-                    self.hook_tree.item(item, values=(item_values[0], item_values[1], preview))
+                    function_name = self.hooks.get(str(hook_id), {}).get('function', item_values[1])
+                    self.hook_tree.item(item, values=(item_values[0], self.format_hook_function_label(hook_id, function_name), preview))
                     break
+            self.update_hook_status_panel()
     
+    def update_hook_action_state(self):
+        """Enable or disable hook actions based on current selection."""
+        if hasattr(self, 'select_hook_btn'):
+            concat_state = self.get_hook_concatenation_state()
+            if concat_state['active']:
+                self.select_hook_btn.config(text='🔗 Concatenation Manages Output', state='disabled')
+            else:
+                state = 'normal' if self.hook_tree.selection() and self.attached_pid else 'disabled'
+                self.select_hook_btn.config(text='✅ Use Selected Hook', state=state)
+
+        if hasattr(self, 'attach_manual_hook_btn'):
+            self.attach_manual_hook_btn.config(state='normal' if self.attached_pid else 'disabled')
+
     def select_hook(self):
         """Select a hook to display its output"""
         selection = self.hook_tree.selection()
         if not selection:
-            messagebox.showwarning("No Selection", "Please select a hook from the list.")
+            self.notify_user("Select a hook to activate it.", level='warning')
             return
         
         item = self.hook_tree.item(selection[0])
@@ -3060,55 +3882,93 @@ For more information, refer to the Textractor documentation.
             
             self.selected_hook_id = hook_id
             self.clear_output()
-            self.append_output(f"✓ Selected Hook {hook_id}\n")
-            self.append_output(f"Function: {item['values'][1]}\n")
-            self.append_output("─" * 50 + "\n\n")
+            self.append_event(f"✓ Selected Hook {hook_id}\n")
+            self.append_event(f"Function: {item['values'][1]}\n")
+            self.append_event("─" * 50 + "\n\n")
             
             if hook_id in self.hooks and self.hooks[hook_id]['texts']:
                 for text in self.hooks[hook_id]['texts']:
                     self.append_output(f"{text}\n", True, True)
-                self.append_output("\n" + "─" * 50 + "\n\n")
+                self.append_event("\n" + "─" * 50 + "\n\n")
             
             # Save this hook selection to game profile
             self.save_hook_profile(hook_id=hook_id)
+            self.update_hook_status_panel(f"selected hook {hook_id}")
+            self.notify_user(f"Hook {hook_id} selected.", level='success')
+            self.toggle_section('hook', True)
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to select hook:\n{str(e)}")
     
+    def update_event_text_layout(self):
+        """Resize the session events area to its content up to a small cap."""
+        if not hasattr(self, 'event_text'):
+            return
+        try:
+            line_count = int(self.event_text.index('end-1c').split('.')[0])
+        except Exception:
+            line_count = 1
+
+        visible_lines = max(1, min(4, line_count))
+        self.event_text.config(height=visible_lines)
+        self.event_text_default_height = visible_lines
+
+        needs_scrollbar = line_count > 4
+        if hasattr(self, 'event_scrollbar'):
+            if needs_scrollbar:
+                self.event_scrollbar.grid()
+            else:
+                self.event_scrollbar.grid_remove()
+
+        if hasattr(self, 'update_scrollbar_visibility'):
+            self.root.after(25, self.update_scrollbar_visibility)
+
+    def append_event(self, text):
+        """Append non-dialogue status text to the session event log."""
+        if not hasattr(self, 'event_text'):
+            return
+
+        def do_append():
+            self.event_text.config(state='normal')
+            self.event_text.insert(tk.END, text)
+            self.event_text.see(tk.END)
+            self.event_text.config(state='disabled')
+            self.update_event_text_layout()
+
+        self.run_on_ui_thread(do_append)
+
     def append_output(self, text, process_plugins=True, allow_auto_copy=False):
         """Append text to the output area with plugin filtering"""
         if process_plugins:
-            # Process text through active plugins
-            processed_text = self.process_text_through_plugins(text)
-            clipboard_text = self.process_clipboard_text_through_plugins(text)
+            self.log_pipeline('append_output.received', incoming=text, allow_auto_copy=allow_auto_copy)
+            # Process text through active plugins once for both display and clipboard outputs
+            processed_text, clipboard_text = self.process_plugin_output_bundle(text)
         else:
             processed_text = text
             clipboard_text = text
-        
-        if processed_text is None:
-            pass
-        else:
-            # Use the processed text (which may have been modified by plugins)
-            self.output_text.config(state='normal')
-            self.output_text.insert(tk.END, processed_text)
-            self.output_text.see(tk.END)
-            self.output_text.config(state='disabled')
-            
-            # Update statistics
-            self.update_statistics(processed_text)
-        
-        # Auto-copy only for extracted dialogue text explicitly marked as safe.
-        # Clipboard uses a plugin-aware pipeline that keeps cleanup/filtering
-        # while skipping translation/display-only plugin output.
-        fallback_auto_copy = (
-            not allow_auto_copy
-            and self.auto_copy_enabled.get()
-            and clipboard_text is not None
-        )
 
-        if self.auto_copy_enabled.get() and (allow_auto_copy or fallback_auto_copy) and clipboard_text is not None:
-            self.auto_copy_text(clipboard_text)
-    
+        def do_append(processed_text_value, clipboard_text_value):
+            self.log_pipeline('append_output.ui', processed_text=processed_text_value, clipboard_text=clipboard_text_value, allow_auto_copy=allow_auto_copy)
+            if processed_text_value is not None:
+                self.output_text.config(state='normal')
+                self.output_text.insert(tk.END, processed_text_value)
+                self.output_text.see(tk.END)
+                self.output_text.config(state='disabled')
+                self.update_statistics(processed_text_value)
+
+            fallback_auto_copy = (
+                not allow_auto_copy
+                and self.auto_copy_enabled.get()
+                and clipboard_text_value is not None
+            )
+
+            if self.auto_copy_enabled.get() and (allow_auto_copy or fallback_auto_copy) and clipboard_text_value is not None:
+                self.log_pipeline('append_output.auto_copy', clipboard_text=clipboard_text_value, allow_auto_copy=allow_auto_copy, fallback_auto_copy=fallback_auto_copy)
+                self.auto_copy_text(clipboard_text_value)
+            else:
+                self.log_pipeline('append_output.no_auto_copy', clipboard_text=clipboard_text_value, allow_auto_copy=allow_auto_copy, fallback_auto_copy=fallback_auto_copy, auto_copy_enabled=self.auto_copy_enabled.get())
+
+        self.run_on_ui_thread(do_append, processed_text, clipboard_text)
     
     def auto_copy_text(self, text):
         """Automatically copy new text to clipboard"""
@@ -3116,12 +3976,13 @@ For more information, refer to the Textractor documentation.
             # Only copy non-empty, non-console text
             text_clean = text.strip()
             if text_clean and not text_clean.startswith('[Console]'):
+                self.log_pipeline('clipboard.copy', text=text_clean)
                 print(f"[Clipboard] Copying text: {text_clean[:200]}", flush=True)
                 self.root.clipboard_clear()
                 self.root.clipboard_append(text_clean)
                 self.root.update()
             else:
-                pass
+                self.log_pipeline('clipboard.skip', text=text_clean)
         except Exception:
             import traceback
             print("[Clipboard] Failed to copy text to clipboard.", flush=True)
@@ -3132,7 +3993,7 @@ For more information, refer to the Textractor documentation.
         try:
             text_content = self.output_text.get(1.0, tk.END).strip()
             if not text_content:
-                messagebox.showinfo("Info", "No text to copy!")
+                self.notify_user("No text to copy.", level='info')
                 return
             
             self.root.clipboard_clear()
@@ -3156,7 +4017,7 @@ For more information, refer to the Textractor documentation.
         try:
             text_content = self.output_text.get(1.0, tk.END).strip()
             if not text_content:
-                messagebox.showinfo("Info", "No text to save!")
+                self.notify_user("No text to save.", level='info')
                 return
             
             filename = filedialog.asksaveasfilename(
@@ -3169,15 +4030,20 @@ For more information, refer to the Textractor documentation.
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write(text_content)
                 
-                messagebox.showinfo("Success", f"Text saved to:\n{filename}")
+                self.notify_user(f"Text saved to {filename}.", level='success', timeout_ms=6000)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save file:\n{str(e)}")
     
     def clear_output(self):
-        """Clear the output text area"""
+        """Clear the output and event text areas"""
         self.output_text.config(state='normal')
         self.output_text.delete(1.0, tk.END)
         self.output_text.config(state='disabled')
+        if hasattr(self, 'event_text'):
+            self.event_text.config(state='normal')
+            self.event_text.delete(1.0, tk.END)
+            self.event_text.config(state='disabled')
+            self.update_event_text_layout()
         # Reset all plugins state
         self.reset_all_plugins()
         # Reset statistics
@@ -3209,12 +4075,17 @@ For more information, refer to the Textractor documentation.
         
         self.status_label.config(text="● Detached", foreground=self.colors['text_dim'])
         self.detach_btn.config(state='disabled')
+        self.update_hook_action_state()
+        self.update_hook_status_panel("detached from process")
+        self.notify_user("Detached from process.", level='info')
+        self.toggle_section('process', False)
+        self.toggle_section('hook', False)
         
-        self.append_output("\n✓ Detached from process\n")
+        self.append_event("\n✓ Detached from process\n")
     
     
     def create_status_bar(self):
-        """Create status bar with statistics"""
+        """Create status bar with statistics and transient notices."""
         status_frame = ttk.Frame(self.root, style="Card.TFrame", padding=(10, 5))
         status_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=15, pady=(5, 10))
         
@@ -3234,7 +4105,23 @@ For more information, refer to the Textractor documentation.
         
         self.status_rate_label = ttk.Label(status_frame, text="Rate: 0 c/s", style="Status.TLabel")
         self.status_rate_label.pack(side=tk.LEFT)
-    
+
+        if TRAY_AVAILABLE:
+            ttk.Button(
+                status_frame,
+                text="🔽 Minimize to Tray",
+                command=self.hide_to_tray,
+                style="Secondary.TButton"
+            ).pack(side=tk.RIGHT)
+
+        self.status_notice_label = ttk.Label(
+            status_frame,
+            text="Ready",
+            style="Status.TLabel",
+            foreground=self.colors['text_dim']
+        )
+        self.status_notice_label.pack(side=tk.RIGHT, padx=(15, 10))
+
     def update_status_bar(self):
         """Update status bar with current statistics"""
         if self.attached_pid:
@@ -3242,6 +4129,9 @@ For more information, refer to the Textractor documentation.
             self.status_conn_label.config(text=conn_text, foreground=self.colors['success'])
         else:
             self.status_conn_label.config(text="● Disconnected", foreground=self.colors['text_dim'])
+
+        self.update_hook_action_state()
+        self.update_hook_status_panel()
         
         self.status_lines_label.config(text=f"Lines: {self.stats['lines']}")
         self.status_words_label.config(text=f"Words: {self.stats['words']}")
@@ -3388,6 +4278,7 @@ For more information, refer to the Textractor documentation.
     def on_window_close(self):
         """Handle window close button"""
         # Save configuration on close
+        self.persist_window_geometry()
         self.save_plugins_config()
         
         if TRAY_AVAILABLE:
@@ -3428,36 +4319,29 @@ For more information, refer to the Textractor documentation.
         if event and event.widget == self.root:
             # Check if window state changed
             self.root.after(100, self.adjust_layout_for_fullscreen)
+            self.schedule_window_geometry_save()
     
     def adjust_layout_for_fullscreen(self):
-        """Adjust component heights based on fullscreen/windowed mode"""
+        """Adjust component heights based on fullscreen/windowed mode."""
         if self.is_fullscreen:
-            # In fullscreen: increase heights to fill screen, hide scrollbar
             self.process_tree.config(height=4)
-            self.hook_tree.config(height=4)
-            self.output_text.config(height=15)
-            
-            # Force scrollbar to hide
-            if hasattr(self, 'update_scrollbar_visibility'):
-                self.update_scrollbar_visibility()
-            
-            # Reset canvas scroll position to top
-            if hasattr(self, 'canvas'):
-                self.canvas.yview_moveto(0)
+            self.hook_tree.config(height=5)
+            self.plugins_tree.config(height=9)
+            self.event_text.config(height=max(self.event_text_default_height, 4))
+            self.output_text.config(height=13)
         else:
-            # In windowed mode: restore default heights, allow scrollbar
             self.process_tree.config(height=self.process_tree_default_height)
             self.hook_tree.config(height=self.hook_tree_default_height)
+            self.plugins_tree.config(height=7)
+            self.event_text.config(height=self.event_text_default_height)
             self.output_text.config(height=self.output_text_default_height)
-            
-            # Update scrollbar visibility
-            if hasattr(self, 'update_scrollbar_visibility'):
-                self.root.after(100, self.update_scrollbar_visibility)
     
     def on_closing(self):
         """Handle window closing"""
         # Save configuration on close
         self.save_plugins_config()
+
+        self.shutdown_plugin_instances()
         
         if self.cli_process:
             self.detach_process()
@@ -3467,44 +4351,22 @@ def main():
     log_path = setup_runtime_logging()
     logging.info('Entered main%s', f' (log: {log_path})' if log_path else '')
 
-    # Check if running as script and ensure admin rights
-    # This enables the underlying CLI to attach to games running as admin
+    # Source and packaged launches now stay in the current user context.
     is_frozen = getattr(sys, 'frozen', False)
     is_nuitka = bool(getattr(sys, '__compiled__', False))
     launched_script_path = Path(sys.argv[0]).suffix.lower() if sys.argv else ''
     is_script_launch = launched_script_path == '.py'
     is_compiled = is_frozen or is_nuitka or not is_script_launch
-    skip_elevation = os.environ.get("SUGOIHOOK_SKIP_ELEVATION") == "1"
     logging.info(
-        'Startup flags: is_frozen=%s is_nuitka=%s is_compiled=%s is_script_launch=%s skip_elevation=%s executable=%s argv0=%s',
+        'Startup flags: is_frozen=%s is_nuitka=%s is_compiled=%s is_script_launch=%s executable=%s argv0=%s',
         is_frozen,
         is_nuitka,
         is_compiled,
         is_script_launch,
-        skip_elevation,
         sys.executable,
         sys.argv[0] if sys.argv else '',
     )
-    
-    if is_script_launch and not skip_elevation:
-        try:
-            if not ctypes.windll.shell32.IsUserAnAdmin():
-                logging.info('Elevation required for script mode; relaunching with admin rights.')
-                # Re-run with admin rights
-                # Use subprocess.list2cmdline to properly quote arguments
-                params = subprocess.list2cmdline(sys.argv)
-                
-                # Use pythonw.exe if available to avoid opening a new console window
-                executable = sys.executable
-                if executable.lower().endswith('python.exe'):
-                    pythonw = executable[:-4] + 'w.exe'
-                    if os.path.exists(pythonw):
-                        executable = pythonw
-                
-                ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
-                sys.exit()
-        except Exception:
-            logging.exception('Elevation attempt failed; continuing as normal user.')
+    logging.info('Auto-elevation is disabled; continuing in the current user context.')
 
     # Enable DPI awareness for crisp text
     try:
@@ -3540,6 +4402,9 @@ if __name__ == "__main__":
     except Exception:
         logging.critical('Fatal startup exception', exc_info=True)
         raise
+
+
+
 
 
 

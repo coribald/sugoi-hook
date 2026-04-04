@@ -21,6 +21,7 @@ class OverlayWindowPlugin(TextractorPlugin):
         self.overlay = None
         self.text_widget = None
         self.drag_data = {"x": 0, "y": 0}
+        self.save_after_id = None
         
         # Default configuration
         self.config = {
@@ -44,7 +45,9 @@ class OverlayWindowPlugin(TextractorPlugin):
             'min_height': 100,
             'max_height': 300,
             'default_width': 900,
-            'default_height': 200
+            'default_height': 200,
+            'window_x': 100,
+            'window_y': 100,
         }
         
         # Load saved configuration
@@ -96,7 +99,9 @@ class OverlayWindowPlugin(TextractorPlugin):
         self.overlay.maxsize(self.config['max_width'], self.config['max_height'])
         
         # Initial geometry from config
-        self.overlay.geometry(f"{self.config['default_width']}x{self.config['default_height']}+100+100")
+        self.overlay.geometry(
+            f"{self.config['default_width']}x{self.config['default_height']}+{self.config['window_x']}+{self.config['window_y']}"
+        )
         
         # Remove window decorations (title bar, borders)
         self.overlay.overrideredirect(True)
@@ -114,6 +119,7 @@ class OverlayWindowPlugin(TextractorPlugin):
         # Make it draggable
         self.overlay.bind('<Button-1>', self.start_move)
         self.overlay.bind('<B1-Motion>', self.do_move)
+        self.overlay.bind('<Configure>', self.on_overlay_configure)
         
         # Add a close button with configurable color
         close_btn = tk.Label(self.overlay, text="x", bg=bg_color,
@@ -196,6 +202,33 @@ class OverlayWindowPlugin(TextractorPlugin):
                             self.drag_data["height"] + delta_y))
         
         self.overlay.geometry(f"{new_width}x{new_height}")
+
+    def on_overlay_configure(self, event):
+        if event.widget != self.overlay:
+            return
+        try:
+            self.config['window_x'] = self.overlay.winfo_x()
+            self.config['window_y'] = self.overlay.winfo_y()
+            self.config['default_width'] = self.overlay.winfo_width()
+            self.config['default_height'] = self.overlay.winfo_height()
+            self.schedule_save_config()
+        except Exception:
+            pass
+
+    def schedule_save_config(self):
+        if not self.overlay:
+            self.save_config()
+            return
+        if self.save_after_id:
+            try:
+                self.overlay.after_cancel(self.save_after_id)
+            except Exception:
+                pass
+        self.save_after_id = self.overlay.after(250, self.flush_save_config)
+
+    def flush_save_config(self):
+        self.save_after_id = None
+        self.save_config()
 
     def process_text(self, text: str) -> str:
         if not self.enabled:
