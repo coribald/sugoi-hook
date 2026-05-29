@@ -702,7 +702,9 @@ class ModernTextractorGUI:
                     'prefix_hook_ids': prefix_hook_ids,
                     'speaker_wait_ms': int(plugin_state.get('speaker_wait_ms', 150)),
                 }
-            except Exception:
+            except Exception as exc:
+                if runtime_debug_logging_enabled():
+                    logging.exception("Failed to read Hook Concatenation state: %s", exc)
                 break
 
         return {
@@ -4058,7 +4060,7 @@ For more information, refer to the Textractor documentation.
                     label="Copy Luna Context Info",
                     command=lambda context_info=context_info: self.copy_hook_context_info(context_info, "Luna context info")
                 )
-            else:
+            if function_name:
                 menu.add_command(
                     label="Copy Hook Function Label",
                     command=lambda function_name=function_name: self.copy_hook_context_info(function_name, "hook function label")
@@ -4168,7 +4170,6 @@ For more information, refer to the Textractor documentation.
             if self.resolve_hook_concat_selector(current_dialogue) == str(hook_id):
                 self.notify_user("That hook is already assigned as the dialogue hook.", level='warning')
                 return
-            updated_prefixes = [selector_value]
             if not plugin.set_setting('prefix_hook_ids', selector_value):
                 self.notify_user("Failed to set prefix hook.", level='warning')
                 return

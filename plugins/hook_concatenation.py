@@ -10,11 +10,11 @@ from plugins import TextractorPlugin
 
 
 def runtime_debug_logging_enabled() -> bool:
-    import os
-    import sys
     env_enabled = os.environ.get('SUGOIHOOK_DEBUG_LOGGING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
     argv_enabled = any(str(arg).strip().lower() == '--debug' for arg in sys.argv[1:])
     return env_enabled or argv_enabled
+
+
 from typing import Optional
 import logging
 import os
@@ -65,7 +65,6 @@ class HookConcatenationPlugin(TextractorPlugin):
         self._state['burst_line_threshold'] = 4
         self._state['burst_settle_ms'] = 200
         self._state['hook_buffers'] = {}
-        self._state['clipboard_hook_buffers'] = {}
         self._state['pending_dialogue'] = None
         self._state['pending_timer_id'] = None
         self._state['pending_clipboard_emit'] = None
@@ -280,16 +279,6 @@ class HookConcatenationPlugin(TextractorPlugin):
             return True
         return all(prefix_hook_id in self._state['hook_buffers'] for prefix_hook_id in config['prefix_hook_ids'])
 
-    def _normalize_combined_output_order(self, text: str) -> str:
-        stripped = text.strip()
-        # Defensive fix: if we somehow get quoted dialogue followed by a short speaker label,
-        # move the label back in front where VN hook concatenation expects it.
-        trailing_label_match = re.match(r'^(「.+?」)([^「」\s]{1,24})$', stripped)
-        if trailing_label_match:
-            dialogue_text, trailing_label = trailing_label_match.groups()
-            return f"{trailing_label}{dialogue_text}"
-        return stripped
-
     def _build_clipboard_output(self, config, hook_text: str) -> str:
         mode = str(self._state.get('clipboard_output_mode', 'combined')).strip().lower()
         dialogue_text = (hook_text or '').strip()
@@ -305,7 +294,7 @@ class HookConcatenationPlugin(TextractorPlugin):
             if prefix_text:
                 output_parts.append(prefix_text)
         output_parts.append(dialogue_text)
-        return self._normalize_combined_output_order(''.join(output_parts))
+        return ''.join(output_parts)
 
     def _build_pending_clipboard_output(self) -> Optional[str]:
         config = self._get_concat_config()
@@ -351,7 +340,7 @@ class HookConcatenationPlugin(TextractorPlugin):
             output_parts.append(dialogue_text)
         if not output_parts:
             return ""
-        return self._normalize_combined_output_order(''.join(output_parts)) + '\n'
+        return ''.join(output_parts) + '\n'
 
     def _emit_pending_dialogue_now(self) -> Optional[str]:
         self._cancel_pending_timer()
@@ -544,7 +533,6 @@ class HookConcatenationPlugin(TextractorPlugin):
 
     def _discard_pending_concat_state(self):
         self._state['hook_buffers'] = {}
-        self._state['clipboard_hook_buffers'] = {}
         self._state['pending_dialogue'] = None
         self._state['pending_clipboard_emit'] = None
 
@@ -593,17 +581,17 @@ class HookConcatenationPlugin(TextractorPlugin):
             'hook_ids': (
                 self._state['hook_ids'],
                 'str',
-                'Legacy hook order/selectors (fallback only). For Luna you can use numeric IDs or full context_info selectors.'
+                'Legacy hook order/selectors (fallback only). For Luna you can use numeric IDs, function labels, or full context_info selectors.'
             ),
             'dialogue_hook_id': (
                 self._state['dialogue_hook_id'],
                 'str',
-                'Required dialogue hook selector. Supports a numeric ID like 2 or a full Luna context_info selector.'
+                'Required dialogue hook selector. Supports a numeric ID like 2, a Luna function label like EXBWX0@25C880, or full Luna context_info.'
             ),
             'prefix_hook_ids': (
                 self._state['prefix_hook_ids'],
                 'str',
-                'Optional prefix hook selectors in order. Supports numeric IDs like 1 or full Luna context_info selectors.'
+                'Optional prefix hook selectors in order. Supports numeric IDs like 1, Luna function labels, or full Luna context_info selectors.'
             ),
             'speaker_wait_ms': (
                 self._state['speaker_wait_ms'],
