@@ -27,7 +27,14 @@ EARLY_LOG_PATH = None
 def runtime_debug_logging_enabled() -> bool:
     env_enabled = os.environ.get('SUGOIHOOK_DEBUG_LOGGING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
     argv_enabled = any(str(arg).strip().lower() == '--debug' for arg in sys.argv[1:])
-    return env_enabled or argv_enabled
+    executable_name = Path(sys.executable).name.lower()
+    argv0_name = Path(sys.argv[0]).name.lower() if sys.argv else ''
+    debug_build_enabled = any(
+        name.endswith('_debug.exe') or name.endswith('debug.exe')
+        for name in (executable_name, argv0_name)
+        if name
+    )
+    return env_enabled or argv_enabled or debug_build_enabled
 
 
 def bootstrap_runtime_streams():
@@ -909,9 +916,10 @@ class ModernTextractorGUI:
     def run_pre_translation_plugins(self, text):
         """Run the shared pre-translation plugin pipeline and collect later phases."""
         if not PLUGINS_AVAILABLE:
-            return text, [], []
+            return text, text, [], []
 
         current_text = text
+        clipboard_text = text
         translation_plugins = []
         post_translation_plugins = []
         translation_phase_started = False
@@ -935,17 +943,29 @@ class ModernTextractorGUI:
                     continue
 
                 try:
-                    result = plugin.process_text(current_text)
-                    if result is None:
-                        self.log_pipeline('pre_translation.plugin_dropped', plugin=plugin_filename, incoming=current_text)
-                        return None, translation_plugins, post_translation_plugins
-                    self.log_pipeline('pre_translation.plugin_result', plugin=plugin_filename, output=result)
-                    current_text = result
+                    if current_text is not None:
+                        display_result = plugin.process_text(current_text)
+                        if display_result is None:
+                            self.log_pipeline('pre_translation.plugin_dropped', plugin=plugin_filename, incoming=current_text)
+                        else:
+                            self.log_pipeline('pre_translation.plugin_result', plugin=plugin_filename, output=display_result)
+                        current_text = display_result
+
+                    if clipboard_text is not None:
+                        clipboard_result = plugin.process_clipboard_text(clipboard_text)
+                        if clipboard_result is None:
+                            self.log_pipeline('pre_translation.clipboard_plugin_dropped', plugin=plugin_filename, incoming=clipboard_text)
+                        else:
+                            self.log_pipeline('pre_translation.clipboard_plugin_result', plugin=plugin_filename, output=clipboard_result)
+                        clipboard_text = clipboard_result
                 except Exception:
                     pass
 
-        self.log_pipeline('pre_translation.complete', output=current_text, translation_plugins=[getattr(p, 'name', type(p).__name__) for p in translation_plugins], post_plugins=[getattr(p, 'name', type(p).__name__) for p in post_translation_plugins])
-        return current_text, translation_plugins, post_translation_plugins
+        if current_text is None:
+            return None, clipboard_text, translation_plugins, post_translation_plugins
+
+        self.log_pipeline('pre_translation.complete', output=current_text, clipboard_output=clipboard_text, translation_plugins=[getattr(p, 'name', type(p).__name__) for p in translation_plugins], post_plugins=[getattr(p, 'name', type(p).__name__) for p in post_translation_plugins])
+        return current_text, clipboard_text, translation_plugins, post_translation_plugins
 
     def process_plugin_output_bundle(self, text):
         """Build display and clipboard outputs from one shared plugin pass."""
@@ -953,18 +973,19 @@ class ModernTextractorGUI:
             stripped = text.strip() if isinstance(text, str) else text
             return text, stripped
 
-        current_text, translation_plugins, post_translation_plugins = self.run_pre_translation_plugins(text)
+        current_text, clipboard_pre_translation, translation_plugins, post_translation_plugins = self.run_pre_translation_plugins(text)
         if current_text is None:
-            self.log_pipeline('bundle.dropped_pre_translation', incoming=text)
+            self.log_pipeline('bundle.dropped_pre_translation', incoming=text, clipboard_pre_translation=clipboard_pre_translation)
             return None, None
 
         translator_input = current_text.strip() if isinstance(current_text, str) else current_text
-        self.log_pipeline('bundle.start', current_text=current_text, translator_input=translator_input, translation_plugin_count=len(translation_plugins), post_plugin_count=len(post_translation_plugins))
-        clipboard_text = translator_input
+        clipboard_text = clipboard_pre_translation.strip() if isinstance(clipboard_pre_translation, str) else clipboard_pre_translation
+        self.log_pipeline('bundle.start', current_text=current_text, translator_input=translator_input, clipboard_pre_translation=clipboard_pre_translation, translation_plugin_count=len(translation_plugins), post_plugin_count=len(post_translation_plugins))
         display_text = current_text
 
         if translation_plugins:
             translation_results = []
+            self.log_pipeline('translation.request', translator_input=translator_input, display_source=current_text, clipboard_source=clipboard_text, translation_plugins=[getattr(p, 'name', type(p).__name__) for p in translation_plugins])
 
             for plugin in translation_plugins:
                 try:
@@ -1025,6 +1046,7 @@ class ModernTextractorGUI:
             except Exception:
                 pass
 
+        self.log_pipeline('output.summary', translator_input=translator_input, output_window_text=display_text, clipboard_text=clipboard_text)
         self.log_pipeline('bundle.complete', display_text=display_text, clipboard_text=clipboard_text)
         return display_text, clipboard_text
 
@@ -4402,7 +4424,6 @@ def main():
     logging.info('Tk mainloop exited.')
 
 if __name__ == "__main__":
-    main()
     try:
         main()
     except Exception:

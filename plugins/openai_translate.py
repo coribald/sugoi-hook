@@ -99,6 +99,15 @@ class OpenAITranslatePlugin(TextractorPlugin):
             self.session.close()
             self.session = None
 
+    def reset_session(self):
+        """Drop any stale keep-alive connection and create a fresh session lazily."""
+        if self.session:
+            try:
+                self.session.close()
+            except Exception:
+                pass
+        self.session = None
+
     def process_text(self, text: str) -> str:
         if not text or not text.strip():
             return text
@@ -171,60 +180,66 @@ class OpenAITranslatePlugin(TextractorPlugin):
                 "effort": self.reasoning_effort
             }
 
-        try:
-            self.log_payload(payload)
-            if self.debug_logging and runtime_debug_logging_enabled() and recent_context:
-                self.log_debug("Recent original context:")
-                print(json.dumps(recent_context, ensure_ascii=False, indent=2), flush=True)
-            self.log_debug(
-                f"Sending request. model={self.model}, input_len={len(text)}, "
-                f"context_len={len(self.context_doc)}, recent_context_lines={len(recent_context)}, "
-                f"max_output_tokens={self.max_output_tokens}, "
-                f"reasoning_effort={self.reasoning_effort}, verbosity={effective_verbosity}"
-            )
-            response = self.session.post(
-                "https://api.openai.com/v1/responses",
-                headers={
-                    "Authorization": f"Bearer {self.api_key.strip()}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=self.timeout_seconds,
-            )
-            self.log_debug(f"HTTP {response.status_code}")
-            response.raise_for_status()
-            data = response.json()
-            self.log_response(data)
-            output_text = self.extract_output_text(data)
-            if output_text:
-                cleaned_output = output_text.strip()
-                if self.is_noop_translation(text, cleaned_output):
-                    self.log_debug("Model returned the source text unchanged; treating as no translation.")
-                    return None
-                preview = cleaned_output.replace("\n", "\\n")
-                self.log_debug(f"Translation OK: {preview[:200]}")
-                return cleaned_output
-            if data.get("status") == "incomplete":
-                incomplete_reason = data.get("incomplete_details", {}).get("reason")
-                self.log_debug(f"Response incomplete. reason={incomplete_reason}")
-            self.log_debug("Response parsed but no output_text was found.")
-        except requests.exceptions.HTTPError as exc:
-            response_text = ""
+        for attempt in range(2):
             try:
-                response_text = exc.response.text[:2000] if exc.response is not None else ""
-            except Exception:
-                response_text = "<unable to read response body>"
-            self.log_debug(f"HTTP error: {exc}. Body: {response_text}")
-            return None
-        except requests.exceptions.Timeout:
-            self.log_debug(f"Request timed out after {self.timeout_seconds} seconds.")
-            return None
-        except requests.exceptions.ConnectionError as exc:
-            self.log_debug(f"Connection error: {exc}")
-            return None
-        except Exception as exc:
-            self.log_debug(f"Unexpected error: {type(exc).__name__}: {exc}")
-            return None
+                if self.session is None:
+                    self.on_enable()
+                self.log_payload(payload)
+                if self.debug_logging and runtime_debug_logging_enabled() and recent_context:
+                    self.log_debug("Recent original context:")
+                    print(json.dumps(recent_context, ensure_ascii=False, indent=2), flush=True)
+                self.log_debug(
+                    f"Sending request. attempt={attempt + 1}/2, model={self.model}, input_len={len(text)}, "
+                    f"context_len={len(self.context_doc)}, recent_context_lines={len(recent_context)}, "
+                    f"max_output_tokens={self.max_output_tokens}, "
+                    f"reasoning_effort={self.reasoning_effort}, verbosity={effective_verbosity}"
+                )
+                response = self.session.post(
+                    "https://api.openai.com/v1/responses",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key.strip()}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=self.timeout_seconds,
+                )
+                self.log_debug(f"HTTP {response.status_code}")
+                response.raise_for_status()
+                data = response.json()
+                self.log_response(data)
+                output_text = self.extract_output_text(data)
+                if output_text:
+                    cleaned_output = output_text.strip()
+                    if self.is_noop_translation(text, cleaned_output):
+                        self.log_debug("Model returned the source text unchanged; treating as no translation.")
+                        return None
+                    preview = cleaned_output.replace("\n", "\\n")
+                    self.log_debug(f"Translation OK: {preview[:200]}")
+                    return cleaned_output
+                if data.get("status") == "incomplete":
+                    incomplete_reason = data.get("incomplete_details", {}).get("reason")
+                    self.log_debug(f"Response incomplete. reason={incomplete_reason}")
+                self.log_debug("Response parsed but no output_text was found.")
+                return None
+            except requests.exceptions.HTTPError as exc:
+                response_text = ""
+                try:
+                    response_text = exc.response.text[:2000] if exc.response is not None else ""
+                except Exception:
+                    response_text = "<unable to read response body>"
+                self.log_debug(f"HTTP error: {exc}. Body: {response_text}")
+                return None
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                error_type = type(exc).__name__
+                self.log_debug(f"{error_type} on attempt {attempt + 1}/2: {exc}")
+                if attempt == 0:
+                    self.log_debug("Resetting HTTP session and retrying once.")
+                    self.reset_session()
+                    continue
+                return None
+            except Exception as exc:
+                self.log_debug(f"Unexpected error: {type(exc).__name__}: {exc}")
+                return None
 
         return None
 
