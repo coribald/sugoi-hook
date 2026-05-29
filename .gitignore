@@ -62,6 +62,5 @@ nuitka-crash-report.xml
 # Local shortcuts
 /*.lnk
 # Local runtime engine binaries
-/luna_builds/
 /textractor_builds/
 
