@@ -9,6 +9,20 @@ import json
 import re
 from pathlib import Path
 
+
+def get_runtime_user_data_path() -> Path:
+    argv0 = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
+    executable = Path(sys.executable).resolve()
+
+    if argv0 and argv0.suffix.lower() == '.exe' and argv0 != executable:
+        return argv0.parent
+
+    if executable.suffix.lower() == '.exe' and 'python' not in executable.name.lower():
+        return executable.parent
+
+    return Path(__file__).parent.parent
+
+
 class OverlayWindowPlugin(TextractorPlugin):
     name = "Overlay Window"
     description = "Displays text in a transparent overlay window."
@@ -56,7 +70,7 @@ class OverlayWindowPlugin(TextractorPlugin):
     def load_config(self):
         """Load configuration from JSON file"""
         try:
-            config_path = Path(__file__).parent.parent / "overlay_config.json"
+            config_path = self.get_config_path()
             if config_path.exists():
                 with open(config_path, 'r', encoding='utf-8') as f:
                     saved_config = json.load(f)
@@ -67,17 +81,28 @@ class OverlayWindowPlugin(TextractorPlugin):
     def save_config(self):
         """Save configuration to JSON file"""
         try:
-            config_path = Path(__file__).parent.parent / "overlay_config.json"
+            config_path = self.get_config_path()
+            config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=2)
         except Exception:
             pass
 
+    def get_config_path(self) -> Path:
+        app = getattr(self, 'app', None)
+        user_data_dir = getattr(app, 'user_data_dir', None)
+        if user_data_dir:
+            return Path(user_data_dir) / "overlay_config.json"
+        return get_runtime_user_data_path() / "overlay_config.json"
+
     def on_enable(self):
+        self.load_config()
         self.create_overlay()
 
     def on_disable(self):
         if self.overlay:
+            self.capture_overlay_geometry()
+            self.flush_save_config()
             self.overlay.destroy()
             self.overlay = None
             self.text_widget = None
@@ -207,11 +232,20 @@ class OverlayWindowPlugin(TextractorPlugin):
         if event.widget != self.overlay:
             return
         try:
+            self.capture_overlay_geometry()
+            self.schedule_save_config()
+        except Exception:
+            pass
+
+    def capture_overlay_geometry(self):
+        if not self.overlay:
+            return
+        try:
+            self.overlay.update_idletasks()
             self.config['window_x'] = self.overlay.winfo_x()
             self.config['window_y'] = self.overlay.winfo_y()
             self.config['default_width'] = self.overlay.winfo_width()
             self.config['default_height'] = self.overlay.winfo_height()
-            self.schedule_save_config()
         except Exception:
             pass
 
@@ -228,6 +262,7 @@ class OverlayWindowPlugin(TextractorPlugin):
 
     def flush_save_config(self):
         self.save_after_id = None
+        self.capture_overlay_geometry()
         self.save_config()
 
     def process_text(self, text: str) -> str:

@@ -99,7 +99,6 @@ python SugoiHook_gui.py
 
 Helpful launchers in this repo:
 
-
 - `run_debug.bat` / `run_debug.ps1`
   - launches source mode in Windows Terminal for debugging / console visibility
 - `run_normal.bat` / `run_normal.ps1`
@@ -183,6 +182,7 @@ Important behavior:
 
 - translation plugins receive the cleaned untranslated line
 - clipboard gets that same untranslated translator input
+- configurable via concat plugin to include prefix or just clip dialogue-only
 - rolling original-line context can be sent to OpenAI for continuity
 - output processing is async and latest-wins, so rapidly advancing lines does not force the UI to catch up one stale translation at a time
 
@@ -215,7 +215,7 @@ Useful local state files:
 - `overlay_config.json`
   - overlay appearance and geometry
 - `game_profiles.json`
-  - saved game / hook profile data
+  - saved per-game hook profile data used for engine recall and auto-hooking
 - `sugoihook-runtime.log`
   - runtime log file
 

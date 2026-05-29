@@ -19,6 +19,10 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
   - main window geometry
 - `overlay_config.json`
   - overlay window geometry and styling
+- `game_profiles.json`
+  - saved per-game hook profiles
+  - remembers engine choice and a saved hook/manual hook for auto-selection
+  - does not currently store full per-game plugin/app configuration
 
 ## Current Architecture Notes
 

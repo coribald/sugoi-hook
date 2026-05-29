@@ -50,6 +50,23 @@ class HookConcatenationPlugin(TextractorPlugin):
     version = "1.2"
     author = "Sugoi Hook"
 
+    def _log_resolved_config(self, reason: str):
+        if not runtime_debug_logging_enabled():
+            return
+        config = self._get_concat_config()
+        self._log_debug(
+            'resolved_config',
+            reason=reason,
+            enabled_mode=self._state.get('enabled_mode'),
+            dialogue_selector=self._state.get('dialogue_hook_id', ''),
+            dialogue_hook_id=config.get('dialogue_hook_id', ''),
+            prefix_selectors=self._state.get('prefix_hook_ids', ''),
+            prefix_hook_ids=config.get('prefix_hook_ids', []),
+            all_hook_ids=config.get('all_hook_ids', []),
+            speaker_wait_ms=config.get('speaker_wait_ms', 150),
+            clipboard_output_mode=self._state.get('clipboard_output_mode', 'combined'),
+        )
+
     def __init__(self):
         super().__init__()
         self._state['enabled_mode'] = False
@@ -561,6 +578,7 @@ class HookConcatenationPlugin(TextractorPlugin):
 
     def on_enable(self):
         self.reset()
+        self._log_resolved_config('on_enable')
 
     def on_disable(self):
         self.reset()
@@ -644,6 +662,7 @@ class HookConcatenationPlugin(TextractorPlugin):
             try:
                 self._state['enabled_mode'] = bool(value)
                 self.reset()
+                self._log_resolved_config(f'set_setting:{name}')
                 return True
             except (ValueError, TypeError):
                 return False
@@ -662,6 +681,7 @@ class HookConcatenationPlugin(TextractorPlugin):
             try:
                 self._state[name] = str(value).strip()
                 self.reset()
+                self._log_resolved_config(f'set_setting:{name}')
                 return True
             except (ValueError, TypeError):
                 return False
@@ -672,6 +692,7 @@ class HookConcatenationPlugin(TextractorPlugin):
                 if 0 <= wait_ms <= 500:
                     self._state['speaker_wait_ms'] = wait_ms
                     self.reset()
+                    self._log_resolved_config(f'set_setting:{name}')
                     return True
                 return False
             except (ValueError, TypeError):
@@ -682,6 +703,7 @@ class HookConcatenationPlugin(TextractorPlugin):
             if mode in {'combined', 'dialogue_only'}:
                 self._state['clipboard_output_mode'] = mode
                 self.reset()
+                self._log_resolved_config(f'set_setting:{name}')
                 return True
             return False
 
@@ -691,6 +713,7 @@ class HookConcatenationPlugin(TextractorPlugin):
                 if 200 <= max_dialogue_length <= 1000:
                     self._state['max_dialogue_length'] = max_dialogue_length
                     self.reset()
+                    self._log_resolved_config(f'set_setting:{name}')
                     return True
                 return False
             except (ValueError, TypeError):
@@ -700,6 +723,7 @@ class HookConcatenationPlugin(TextractorPlugin):
             try:
                 self._state['burst_stabilization_enabled'] = bool(value)
                 self.reset()
+                self._log_resolved_config(f'set_setting:{name}')
                 return True
             except (ValueError, TypeError):
                 return False
@@ -710,6 +734,7 @@ class HookConcatenationPlugin(TextractorPlugin):
                 if 100 <= window_ms <= 2000:
                     self._state['burst_window_ms'] = window_ms
                     self.reset()
+                    self._log_resolved_config(f'set_setting:{name}')
                     return True
                 return False
             except (ValueError, TypeError):
@@ -721,6 +746,7 @@ class HookConcatenationPlugin(TextractorPlugin):
                 if 2 <= threshold <= 12:
                     self._state['burst_line_threshold'] = threshold
                     self.reset()
+                    self._log_resolved_config(f'set_setting:{name}')
                     return True
                 return False
             except (ValueError, TypeError):
@@ -732,6 +758,7 @@ class HookConcatenationPlugin(TextractorPlugin):
                 if 50 <= settle_ms <= 1000:
                     self._state['burst_settle_ms'] = settle_ms
                     self.reset()
+                    self._log_resolved_config(f'set_setting:{name}')
                     return True
                 return False
             except (ValueError, TypeError):

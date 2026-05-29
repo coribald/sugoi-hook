@@ -31,6 +31,8 @@ echo May take 10-15 minutes on first run...
 echo.
 
 REM Build with Nuitka - Single file mode with raw runtime assets included
+REM Avoid forced stdout/stderr redirection here; in onefile mode it causes
+REM an early native APPCRASH before Python startup on some Windows systems.
 python -m nuitka ^
     --onefile ^
     --include-raw-dir=textractor_builds=textractor_builds ^
@@ -38,6 +40,8 @@ python -m nuitka ^
     --include-raw-dir=plugins=plugins ^
     --include-raw-dir=Translator=Translator ^
     --include-data-files=logo.webp=logo.webp ^
+    --include-data-files=logo.ico=logo.ico ^
+    --windows-icon-from-ico=logo.ico ^
     --enable-plugin=tk-inter ^
     --include-module=tkinter.font ^
     --include-package=pystray ^
@@ -54,8 +58,6 @@ python -m nuitka ^
     --follow-imports ^
     --assume-yes-for-downloads ^
     --windows-console-mode=disable ^
-    --force-stdout-spec={PROGRAM_BASE}.stdout.txt ^
-    --force-stderr-spec={PROGRAM_BASE}.stderr.txt ^
     --output-dir=%OUTPUT_DIR% ^
     --company-name="Sugoi Toolkit Inc." ^
     --product-name="Sugoi Hook" ^
@@ -78,6 +80,32 @@ if errorlevel 1 (
 if exist "%PRESERVE_DIR%\*_config.json" (
     echo Restoring preserved runtime config files...
     copy /y "%PRESERVE_DIR%\*_config.json" "%OUTPUT_DIR%\" >nul
+)
+
+echo Creating desktop-style launch shortcuts...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$shell = New-Object -ComObject WScript.Shell; " ^
+    "$outputDir = (Resolve-Path '%OUTPUT_DIR%').Path; " ^
+    "$exePath = Join-Path $outputDir 'SugoiHook.exe'; " ^
+    "$plainShortcut = Join-Path $outputDir 'SugoiHook v0.6x.lnk'; " ^
+    "$debugShortcut = Join-Path $outputDir 'SugoiHook v0.6x (debug).lnk'; " ^
+    "$plain = $shell.CreateShortcut($plainShortcut); " ^
+    "$plain.TargetPath = $exePath; " ^
+    "$plain.WorkingDirectory = $outputDir; " ^
+    "$plain.IconLocation = $exePath + ',0'; " ^
+    "$plain.Save(); " ^
+    "$debug = $shell.CreateShortcut($debugShortcut); " ^
+    "$debug.TargetPath = $exePath; " ^
+    "$debug.Arguments = '--debug'; " ^
+    "$debug.WorkingDirectory = $outputDir; " ^
+    "$debug.IconLocation = $exePath + ',0'; " ^
+    "$debug.Save()"
+
+if /I not "%KEEP_BUILD_ARTIFACTS%"=="1" (
+    echo Cleaning release build artifacts...
+    if exist "%OUTPUT_DIR%\SugoiHook_gui.build" rmdir /s /q "%OUTPUT_DIR%\SugoiHook_gui.build"
+    if exist "%OUTPUT_DIR%\SugoiHook_gui.dist" rmdir /s /q "%OUTPUT_DIR%\SugoiHook_gui.dist"
+    if exist "%OUTPUT_DIR%\SugoiHook_gui.onefile-build" rmdir /s /q "%OUTPUT_DIR%\SugoiHook_gui.onefile-build"
 )
 
 echo.

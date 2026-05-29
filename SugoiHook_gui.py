@@ -24,6 +24,34 @@ ORIGINAL_STDOUT = sys.stdout
 ORIGINAL_STDERR = sys.stderr
 EARLY_LOG_STREAM = None
 EARLY_LOG_PATH = None
+
+
+def get_runtime_launcher_path() -> Path:
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).resolve()
+
+    argv0 = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
+    executable = Path(sys.executable).resolve()
+
+    if argv0 and argv0.suffix.lower() == '.exe' and argv0 != executable:
+        return argv0
+
+    if executable.suffix.lower() == '.exe' and 'python' not in executable.name.lower():
+        return executable
+
+    return Path(__file__).resolve()
+
+
+def get_runtime_bundle_base_path() -> Path:
+    if getattr(sys, 'frozen', False) or getattr(sys, '__compiled__', False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def get_runtime_user_data_path() -> Path:
+    return get_runtime_launcher_path().parent
+
+
 def runtime_debug_logging_enabled() -> bool:
     env_enabled = os.environ.get('SUGOIHOOK_DEBUG_LOGGING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
     argv_enabled = any(str(arg).strip().lower() == '--debug' for arg in sys.argv[1:])
@@ -41,12 +69,7 @@ def bootstrap_runtime_streams():
     global EARLY_LOG_STREAM, EARLY_LOG_PATH
 
     try:
-        if getattr(sys, 'frozen', False) or getattr(sys, '__compiled__', False):
-            base_path = Path(sys.executable).resolve().parent
-        else:
-            base_path = Path(__file__).resolve().parent
-
-        EARLY_LOG_PATH = base_path / 'sugoihook-runtime.log'
+        EARLY_LOG_PATH = get_runtime_user_data_path() / 'sugoihook-runtime.log'
         EARLY_LOG_STREAM = open(EARLY_LOG_PATH, 'a', encoding='utf-8', buffering=1)
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
         EARLY_LOG_STREAM.write(f"\n===== Sugoi Hook bootstrap started {timestamp} =====\n")
@@ -96,9 +119,7 @@ GAME_LAUNCH_ATTACH_DELAY = 4000
 
 
 def get_runtime_base_path() -> Path:
-    if getattr(sys, 'frozen', False) or getattr(sys, '__compiled__', False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+    return get_runtime_bundle_base_path()
 
 
 class StreamTee:
@@ -127,8 +148,7 @@ class StreamTee:
 
 def setup_runtime_logging():
     try:
-        base_path = get_runtime_base_path()
-        log_path = base_path / 'sugoihook-runtime.log'
+        log_path = get_runtime_user_data_path() / 'sugoihook-runtime.log'
         log_stream = open(log_path, 'a', encoding='utf-8', buffering=1)
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
         log_stream.write(f"\n===== Sugoi Hook session started {timestamp} =====\n")
@@ -175,7 +195,7 @@ def setup_runtime_logging():
 class ModernTextractorGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("✨ Sugoi Hook - Modern Text Extraction")
+        self.root.title("SugoiHook v0.6x")
         self.root.geometry("1000x750")
         self.root.minsize(900, 650)
         
@@ -244,6 +264,8 @@ class ModernTextractorGUI:
         self.plugin_order = []
         self.plugins_config_path = None
         self.plugins_folder = None
+        self.bundled_plugins_folder = None
+        self.plugin_file_paths = {}
         self.plugin_settings = {}
         
         # Game profiles system
@@ -346,26 +368,29 @@ class ModernTextractorGUI:
         }
         
         # Determine CLI paths - handle both development and compiled modes
+        launcher_path = get_runtime_launcher_path()
         is_frozen = getattr(sys, 'frozen', False)
         is_nuitka = getattr(sys, '__compiled__', False) or (
-            sys.executable.lower().endswith('.exe') and 
-            'python' not in os.path.basename(sys.executable).lower()
+            launcher_path.suffix.lower() == '.exe' and
+            launcher_path.resolve() != Path(__file__).resolve()
         )
         is_compiled = is_frozen or is_nuitka
         
         # Set base paths based on compilation mode
         if is_compiled:
-            self.base_path = Path(sys._MEIPASS) if is_frozen else Path(__file__).parent
-            self.app_path = Path(sys.executable).parent
+            self.base_path = Path(sys._MEIPASS) if is_frozen else get_runtime_bundle_base_path()
+            self.app_path = get_runtime_user_data_path()
             self.user_data_dir = self.app_path
             self.user_data_dir.mkdir(parents=True, exist_ok=True)
         else:
             self.base_path = self.app_path = Path(__file__).parent
+            self.user_data_dir = self.app_path
         
         # Configure plugin and profile paths
-        self.plugins_folder = self.app_path / "plugins"
-        self.plugins_config_path = self.app_path / "plugins_config.json"
-        self.game_profiles_path = self.app_path / "game_profiles.json"
+        self.bundled_plugins_folder = self.base_path / "plugins"
+        self.plugins_folder = self.user_data_dir / "plugins"
+        self.plugins_config_path = self.user_data_dir / "plugins_config.json"
+        self.game_profiles_path = self.user_data_dir / "game_profiles.json"
         
         # Engine executable paths
         self.textractor_x86_path = self.base_path / "textractor_builds" / "_x86" / "TextractorCLI.exe"
@@ -427,7 +452,7 @@ class ModernTextractorGUI:
     # ==================== PLUGIN SYSTEM METHODS =============    
     def init_plugin_system(self):
         """Initialize the plugin system"""
-        # Ensure plugins folder exists regardless of PLUGINS_AVAILABLE logic
+        # Ensure writable custom plugins folder exists regardless of bundled plugin layout
         if not self.plugins_folder.exists():
             self.plugins_folder.mkdir(parents=True, exist_ok=True)
             
@@ -442,44 +467,55 @@ class ModernTextractorGUI:
     
     def discover_plugins(self):
         """Discover all available plugins in the plugins folder"""
-        if not self.plugins_folder.exists():
+        plugin_search_paths = []
+        if self.bundled_plugins_folder and self.bundled_plugins_folder.exists():
+            plugin_search_paths.append(self.bundled_plugins_folder)
+        if self.plugins_folder and self.plugins_folder.exists() and self.plugins_folder not in plugin_search_paths:
+            plugin_search_paths.append(self.plugins_folder)
+
+        if not plugin_search_paths:
             return
         
         current_files = set()
-        for plugin_file in self.plugins_folder.glob("*.py"):
-            # Skip __init__.py and other special files
-            if plugin_file.name.startswith("_"):
-                continue
-            
-            current_files.add(plugin_file.name)
-            
-            try:
-                if runtime_debug_logging_enabled():
-                    logging.info('Discovering plugin file: %s', plugin_file)
-                plugin = self.load_plugin(plugin_file)
-                # Apply saved settings to the plugin
-                if plugin:
-                    if runtime_debug_logging_enabled():
-                        logging.info('Loaded plugin: %s (%s)', plugin_file.name, getattr(plugin, 'name', plugin_file.stem))
-                else:
-                    logging.warning('Plugin returned no instance: %s', plugin_file.name)
-
-                if plugin and plugin_file.name in self.plugin_settings:
-                    for setting_name, setting_value in self.plugin_settings[plugin_file.name].items():
-                        try:
-                            plugin.set_setting(setting_name, setting_value)
-                        except Exception:
-                            pass
+        for plugin_dir in plugin_search_paths:
+            for plugin_file in plugin_dir.glob("*.py"):
+                # Skip __init__.py and other special files
+                if plugin_file.name.startswith("_"):
+                    continue
                 
-                # If this plugin was previously active, enable it
-                if plugin and plugin_file.name in self.active_plugins:
-                    plugin.enabled = True
-                    plugin.on_enable()
-            except Exception:
-                pass
+                current_files.add(plugin_file.name)
+                
+                try:
+                    if runtime_debug_logging_enabled():
+                        logging.info('Discovering plugin file: %s', plugin_file)
+                    plugin = self.load_plugin(plugin_file)
+                    # Apply saved settings to the plugin
+                    if plugin:
+                        if runtime_debug_logging_enabled():
+                            logging.info('Loaded plugin: %s (%s)', plugin_file.name, getattr(plugin, 'name', plugin_file.stem))
+                    else:
+                        logging.warning('Plugin returned no instance: %s', plugin_file.name)
+
+                    if plugin and plugin_file.name in self.plugin_settings:
+                        for setting_name, setting_value in self.plugin_settings[plugin_file.name].items():
+                            try:
+                                plugin.set_setting(setting_name, setting_value)
+                            except Exception:
+                                pass
+                    
+                    # If this plugin was previously active, enable it
+                    if plugin and plugin_file.name in self.active_plugins:
+                        plugin.enabled = True
+                        plugin.on_enable()
+                except Exception:
+                    pass
         
         # Clean up active_plugins list - remove any that weren't found
         self.active_plugins = [p for p in self.active_plugins if p in self.plugins]
+        self.plugin_file_paths = {
+            filename: path for filename, path in self.plugin_file_paths.items()
+            if filename in current_files
+        }
         
         # Update plugin_order
         # 1. Remove files that no longer exist
@@ -849,6 +885,7 @@ class ModernTextractorGUI:
                 except Exception:
                     pass
                 self.plugins[plugin_path.name] = plugin_instance
+                self.plugin_file_paths[plugin_path.name] = plugin_path
                 return plugin_instance
                 
         except Exception:
@@ -1343,18 +1380,30 @@ class ModernTextractorGUI:
             
             if result:
                 try:
+                    plugin_path = self.plugin_file_paths.get(plugin_filename, self.plugins_folder / plugin_filename)
+                    try:
+                        is_user_plugin = plugin_path.resolve().parent == self.plugins_folder.resolve()
+                    except Exception:
+                        is_user_plugin = False
+                    if not is_user_plugin:
+                        messagebox.showwarning(
+                            "Cannot Remove Built-in Plugin",
+                            "This plugin is bundled with the application and cannot be deleted from the UI."
+                        )
+                        return
+
                     # Deactivate first
                     self.deactivate_plugin(plugin_filename)
                     
                     # Remove from plugins dict
                     del self.plugins[plugin_filename]
+                    self.plugin_file_paths.pop(plugin_filename, None)
                     
                     # Remove from plugin_order
                     if plugin_filename in self.plugin_order:
                         self.plugin_order.remove(plugin_filename)
                     
                     # Delete the file
-                    plugin_path = self.plugins_folder / plugin_filename
                     if plugin_path.exists():
                         plugin_path.unlink()
                     
@@ -2681,15 +2730,10 @@ class ModernTextractorGUI:
         
         # Header
         
-        title_label = ttk.Label(header_frame, text="✨ Sugoi Hook", 
+        title_label = ttk.Label(header_frame, text="Sugoi Hook v0.6x", 
                                font=('Segoe UI', 20, 'bold'),
                                foreground=self.colors['primary'])
         title_label.pack(side=tk.LEFT)
-        
-        subtitle_label = ttk.Label(header_frame, text="Modern Text Extraction Tool",
-                                   font=('Segoe UI', 10),
-                                   foreground=self.colors['text_dim'])
-        subtitle_label.pack(side=tk.LEFT, padx=(10, 0))
         
         # Engine selection toggle
         engine_frame = ttk.Frame(header_frame)
@@ -4627,8 +4671,12 @@ def main():
     logging.info('Verbose runtime debug logging: %s', 'enabled' if runtime_debug_logging_enabled() else 'disabled')
 
     # Source and packaged launches now stay in the current user context.
+    launcher_path = get_runtime_launcher_path()
     is_frozen = getattr(sys, 'frozen', False)
-    is_nuitka = bool(getattr(sys, '__compiled__', False))
+    is_nuitka = bool(getattr(sys, '__compiled__', False) or (
+        launcher_path.suffix.lower() == '.exe' and
+        launcher_path.resolve() != Path(__file__).resolve()
+    ))
     launched_script_path = Path(sys.argv[0]).suffix.lower() if sys.argv else ''
     is_script_launch = launched_script_path == '.py'
     is_compiled = is_frozen or is_nuitka or not is_script_launch
@@ -4641,6 +4689,15 @@ def main():
         sys.executable,
         sys.argv[0] if sys.argv else '',
     )
+    if runtime_debug_logging_enabled():
+        logging.info(
+            'Runtime paths: bundle_base=%s user_data_dir=%s launcher=%s default_engine=%s debug_enabled=%s',
+            get_runtime_bundle_base_path(),
+            get_runtime_user_data_path(),
+            launcher_path,
+            'luna',
+            True,
+        )
     logging.info('Auto-elevation is disabled; continuing in the current user context.')
 
     # Enable DPI awareness for crisp text
@@ -4666,6 +4723,15 @@ def main():
     logging.info('Constructing ModernTextractorGUI.')
     app = ModernTextractorGUI(root)
     logging.info('ModernTextractorGUI constructed.')
+    if runtime_debug_logging_enabled():
+        logging.info(
+            'App summary: active_engine=%s bundled_plugins_folder=%s user_plugins_folder=%s plugins_config_path=%s game_profiles_path=%s',
+            app.current_engine,
+            getattr(app, 'bundled_plugins_folder', None),
+            getattr(app, 'plugins_folder', None),
+            getattr(app, 'plugins_config_path', None),
+            getattr(app, 'game_profiles_path', None),
+        )
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
     logging.info('Entering Tk mainloop%s', f' (log: {log_path})' if log_path else '')
     root.mainloop()
