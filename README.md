@@ -1,6 +1,6 @@
-# Sugoi Hook
+# Sugoi Hook v0.6x
 
-A Windows GUI for attaching to game processes, selecting text hooks, processing extracted text through plugins, and optionally translating or displaying it in an overlay.
+A fork of SugoiHook - a Windows GUI for attaching to game processes, selecting text hooks, processing extracted text through plugins, and optionally translating or displaying it in an overlay.
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
