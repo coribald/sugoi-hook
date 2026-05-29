@@ -84,7 +84,7 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
   - post-translation flow
   - final display/clipboard decisions
 - `plugins/hook_concatenation.py` emits `[HOOK CONCAT] ...` logs for buffered prefixes/dialogue, waits, and emits.
-- `plugins/remove_empty.py`, `plugins/fix_repeated_chars.py`, and `plugins/remove_duplicates.py` now log their in/out behavior.
+- `plugins/min_length_filter.py`, `plugins/fix_repeated_chars.py`, and `plugins/remove_duplicates.py` now log their in/out behavior.
 - `plugins/openai_translate.py` now prints a sanitized outbound payload plus raw API responses to the console.
 
 ## OpenAI Plugin State

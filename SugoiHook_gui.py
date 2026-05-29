@@ -4197,17 +4197,14 @@ For more information, refer to the Luna Hook documentation and current community
             text_clean = text.strip()
             if text_clean and not text_clean.startswith('[Console]'):
                 self.log_pipeline('clipboard.copy', text=text_clean)
-                if runtime_debug_logging_enabled():
-                    print(f"[Clipboard] Copying text: {text_clean[:200]}", flush=True)
                 self.root.clipboard_clear()
                 self.root.clipboard_append(text_clean)
                 self.root.update()
             else:
                 self.log_pipeline('clipboard.skip', text=text_clean)
-        except Exception:
+        except Exception as exc:
+            self.log_pipeline('clipboard.error', text=text, error=f'{type(exc).__name__}: {exc}')
             import traceback
-            if runtime_debug_logging_enabled():
-                print("[Clipboard] Failed to copy text to clipboard.", flush=True)
             traceback.print_exc()
     
     def copy_to_clipboard(self):

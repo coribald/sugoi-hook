@@ -60,11 +60,11 @@ Sugoi Hook is currently packaged as a Luna-only build:
 - **Hook Concatenation**
   - combines speaker/dialogue style split hooks
   - supports `dialogue_hook_id`, `prefix_hook_ids`, and a short timing window
-- **Remove Empty Lines**
 - **Remove Duplicates**
   - filters immediate repeats instead of aggressively dropping broader matches
 - **Remove Special Characters**
 - **Minimum Length Filter**
+  - now also handles empty / whitespace-only line removal
 - **Fix Repeated Characters**
 - **Deep Translator**
   - configurable `deep_translator` backend

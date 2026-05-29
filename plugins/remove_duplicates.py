@@ -3,9 +3,11 @@ Remove Duplicates Plugin
 ========================
 
 Filters out immediate duplicate text while still allowing a line to recur later.
-Also removes inline duplicates where the same text appears twice in a row.
+Also removes conservative inline duplicates where the same text appears twice in a row.
 """
 
+from typing import Optional
+import logging
 from plugins import HookPlugin
 
 
@@ -15,10 +17,6 @@ def runtime_debug_logging_enabled() -> bool:
     env_enabled = os.environ.get('SUGOIHOOK_DEBUG_LOGGING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
     argv_enabled = any(str(arg).strip().lower() == '--debug' for arg in sys.argv[1:])
     return env_enabled or argv_enabled
-from typing import Optional
-import logging
-import os
-import sys
 
 
 class RemoveDuplicatesPlugin(HookPlugin):
@@ -26,7 +24,7 @@ class RemoveDuplicatesPlugin(HookPlugin):
     Filters out immediate duplicate text entries.
 
     This plugin:
-    - Removes inline duplicates (same text repeated within a line)
+    - Removes conservative inline duplicates (same text repeated within a line)
     - Tracks only the last displayed/clipboard text and filters immediate repeats
     """
 
@@ -62,41 +60,47 @@ class RemoveDuplicatesPlugin(HookPlugin):
         except Exception:
             pass
 
-    def remove_inline_duplicates(self, text: str) -> str:
+    def remove_inline_duplicates(self, text: str) -> tuple[str, Optional[str]]:
         """
         Remove inline duplicates where the same text appears twice in a row.
         For example: "Hello world Hello world" -> "Hello world"
         """
         if not text or len(text) < 4:
-            return text
+            return text, None
 
         text_clean = text.strip()
+        if not text_clean:
+            return text_clean, None
 
-        half_len = len(text_clean) // 2
-        if half_len >= 3:
-            first_half = text_clean[:half_len]
-            second_half = text_clean[half_len:half_len * 2]
+        # Strict full-line duplicate with optional separating whitespace.
+        for split_index in range(3, len(text_clean) - 2):
+            first_part = text_clean[:split_index].rstrip()
+            second_part = text_clean[split_index:].lstrip()
 
-            first_normalized = ' '.join(first_half.split())
-            second_normalized = ' '.join(second_half.split())
+            if len(first_part) < 3 or len(second_part) < 3:
+                continue
 
-            if first_normalized == second_normalized:
-                return first_half.strip()
+            first_normalized = ' '.join(first_part.split())
+            second_normalized = ' '.join(second_part.split())
 
+            if first_normalized and first_normalized == second_normalized:
+                return first_part.strip(), 'full_repeat'
+
+        # Strict repeated prefix pattern only when the entire remainder matches
+        # one more copy of the prefix after whitespace normalization.
         for pattern_len in range(3, min(len(text_clean) // 2 + 1, 200)):
-            pattern = text_clean[:pattern_len]
-            pattern_normalized = ''.join(pattern.split())
-
-            if len(pattern_normalized) < 3:
+            pattern = text_clean[:pattern_len].rstrip()
+            if len(pattern) < 3:
                 continue
 
             rest = text_clean[pattern_len:].lstrip()
+            pattern_normalized = ''.join(pattern.split())
             rest_normalized = ''.join(rest.split())
 
-            if rest_normalized.startswith(pattern_normalized):
-                return pattern.strip()
+            if pattern_normalized and rest_normalized == pattern_normalized:
+                return pattern.strip(), 'normalized_repeat'
 
-        return text_clean
+        return text_clean, None
 
     def process_text(self, text: str) -> Optional[str]:
         self._log_debug('process_text.in', text=text)
@@ -106,7 +110,15 @@ class RemoveDuplicatesPlugin(HookPlugin):
             self._log_debug('process_text.out', output=text)
             return text
 
-        text_clean = self.remove_inline_duplicates(text_clean)
+        original_clean = text_clean
+        text_clean, inline_reason = self.remove_inline_duplicates(text_clean)
+        if inline_reason is not None:
+            self._log_debug(
+                'process_text.inline_dedup',
+                reason=inline_reason,
+                before=original_clean,
+                after=text_clean
+            )
         text_normalized = ''.join(text_clean.split())
 
         if len(text_normalized) < self._state['min_length']:
@@ -131,7 +143,15 @@ class RemoveDuplicatesPlugin(HookPlugin):
             self._log_debug('process_clipboard_text.out', output=text)
             return text
 
-        text_clean = self.remove_inline_duplicates(text_clean)
+        original_clean = text_clean
+        text_clean, inline_reason = self.remove_inline_duplicates(text_clean)
+        if inline_reason is not None:
+            self._log_debug(
+                'process_clipboard_text.inline_dedup',
+                reason=inline_reason,
+                before=original_clean,
+                after=text_clean
+            )
         text_normalized = ''.join(text_clean.split())
 
         if len(text_normalized) < self._state['min_length']:
@@ -167,10 +187,13 @@ class RemoveDuplicatesPlugin(HookPlugin):
         """Set a plugin setting."""
         if name == 'min_length':
             try:
-                self._state['min_length'] = int(value)
-                return True
+                new_value = int(value)
+                if new_value >= 1:
+                    self._state['min_length'] = new_value
+                    return True
             except (ValueError, TypeError):
-                return False
+                pass
+            return False
         return False
 
 

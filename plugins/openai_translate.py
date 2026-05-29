@@ -53,6 +53,12 @@ class OpenAITranslatePlugin(HookPlugin):
         "high": "High",
     }
 
+    LOGGING_LEVELS = {
+        "minimal": "Minimal",
+        "debug": "Debug",
+        "noisy": "Noisy",
+    }
+
     LANGUAGES = {
         "auto": "Auto-detect",
         "english": "English",
@@ -88,7 +94,7 @@ class OpenAITranslatePlugin(HookPlugin):
         self.previous_context_lines = 3
         self.recent_original_lines = deque(maxlen=6)
         self.session = None
-        self.debug_logging = True
+        self.logging_level = "noisy"
 
     def on_enable(self):
         if self.session is None:
@@ -129,7 +135,7 @@ class OpenAITranslatePlugin(HookPlugin):
 
     def translate_text(self, text: str) -> Optional[str]:
         if not self.enabled or not self.api_key.strip():
-            self.log_debug("Skipped request because plugin is disabled or API key is missing.")
+            self.log_debug("Skipped request because plugin is disabled or API key is missing.", level="minimal")
             return None
 
         if not self.should_translate_text(text.strip()):
@@ -163,14 +169,15 @@ class OpenAITranslatePlugin(HookPlugin):
                 if self.session is None:
                     self.on_enable()
                 self.log_payload(payload)
-                if self.debug_logging and runtime_debug_logging_enabled() and recent_context:
+                if self.should_log("debug") and recent_context:
                     self.log_debug("Recent original context:")
                     print(json.dumps(recent_context, ensure_ascii=False, indent=2), flush=True)
                 self.log_debug(
                     f"Sending request. attempt={attempt + 1}/2, model={self.model}, input_len={len(text)}, "
                     f"context_len={len(self.context_doc)}, recent_context_lines={len(recent_context)}, "
                     f"max_output_tokens={self.max_output_tokens}, "
-                    f"reasoning_effort={self.reasoning_effort}, verbosity={effective_verbosity}"
+                    f"reasoning_effort={self.reasoning_effort}, verbosity={effective_verbosity}",
+                    level="debug"
                 )
                 response = self.session.post(
                     "https://api.openai.com/v1/responses",
@@ -181,7 +188,7 @@ class OpenAITranslatePlugin(HookPlugin):
                     json=payload,
                     timeout=self.timeout_seconds,
                 )
-                self.log_debug(f"HTTP {response.status_code}")
+                self.log_debug(f"HTTP {response.status_code}", level="minimal")
                 response.raise_for_status()
                 data = response.json()
                 self.log_response(data)
@@ -189,15 +196,15 @@ class OpenAITranslatePlugin(HookPlugin):
                 if output_text:
                     cleaned_output = output_text.strip()
                     if self.is_noop_translation(text, cleaned_output):
-                        self.log_debug("Model returned the source text unchanged; treating as no translation.")
+                        self.log_debug("Model returned the source text unchanged; treating as no translation.", level="minimal")
                         return None
                     preview = cleaned_output.replace("\n", "\\n")
-                    self.log_debug(f"Translation OK: {preview[:200]}")
+                    self.log_debug(f"Translation OK: {preview[:200]}", level="minimal")
                     return cleaned_output
                 if data.get("status") == "incomplete":
                     incomplete_reason = data.get("incomplete_details", {}).get("reason")
-                    self.log_debug(f"Response incomplete. reason={incomplete_reason}")
-                self.log_debug("Response parsed but no output_text was found.")
+                    self.log_debug(f"Response incomplete. reason={incomplete_reason}", level="minimal")
+                self.log_debug("Response parsed but no output_text was found.", level="minimal")
                 return None
             except requests.exceptions.HTTPError as exc:
                 response_text = ""
@@ -205,51 +212,65 @@ class OpenAITranslatePlugin(HookPlugin):
                     response_text = exc.response.text[:2000] if exc.response is not None else ""
                 except Exception:
                     response_text = "<unable to read response body>"
-                self.log_debug(f"HTTP error: {exc}. Body: {response_text}")
+                self.log_debug(f"HTTP error: {exc}. Body: {response_text}", level="minimal")
                 return None
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
                 error_type = type(exc).__name__
-                self.log_debug(f"{error_type} on attempt {attempt + 1}/2: {exc}")
+                self.log_debug(f"{error_type} on attempt {attempt + 1}/2: {exc}", level="minimal")
                 if attempt == 0:
-                    self.log_debug("Resetting HTTP session and retrying once.")
+                    self.log_debug("Resetting HTTP session and retrying once.", level="minimal")
                     self.reset_session()
                     continue
                 return None
             except Exception as exc:
-                self.log_debug(f"Unexpected error: {type(exc).__name__}: {exc}")
+                self.log_debug(f"Unexpected error: {type(exc).__name__}: {exc}", level="minimal")
                 return None
 
         return None
 
-    def log_debug(self, message: str):
-        if not self.debug_logging or not runtime_debug_logging_enabled():
+    def should_log(self, level: str) -> bool:
+        if not runtime_debug_logging_enabled():
+            return False
+
+        level_order = {
+            "minimal": 1,
+            "debug": 2,
+            "noisy": 3,
+        }
+        configured_level = str(getattr(self, "logging_level", "noisy") or "noisy").strip().lower()
+        configured_rank = level_order.get(configured_level, 3)
+        requested_rank = level_order.get(level, 3)
+        return configured_rank >= requested_rank
+
+    def log_debug(self, message: str, level: str = "debug"):
+        if not self.should_log(level):
             return
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         print(f"[OpenAI Translate][{timestamp}] {message}", flush=True)
 
     def log_payload(self, payload: dict):
-        if not self.debug_logging or not runtime_debug_logging_enabled():
+        if not self.should_log("noisy"):
             return
 
         payload_for_logging = self._truncate_instructions_for_logging(payload)
-        self.log_debug("Outbound payload:")
+        self.log_debug("Outbound payload:", level="noisy")
         print(json.dumps(payload_for_logging, ensure_ascii=False, indent=2), flush=True)
 
     def log_response(self, data: dict):
-        if not self.debug_logging or not runtime_debug_logging_enabled():
+        if not self.should_log("noisy"):
             return
 
         try:
             sanitized_data = self._truncate_instructions_for_logging(data)
             response_text = json.dumps(sanitized_data, ensure_ascii=False, indent=2)
         except Exception as exc:
-            self.log_debug(f"Failed to JSON-format response: {exc}")
+            self.log_debug(f"Failed to JSON-format response: {exc}", level="debug")
             return
 
         if len(response_text) > 6000:
             response_text = response_text[:6000] + "\n... [truncated]"
 
-        self.log_debug("Raw response:")
+        self.log_debug("Raw response:", level="noisy")
         print(response_text, flush=True)
 
     def _truncate_instructions_for_logging(self, value):
@@ -439,10 +460,11 @@ class OpenAITranslatePlugin(HookPlugin):
                 "int",
                 "Previous original lines to send as context (0-6)"
             ),
-            "debug_logging": (
-                self.debug_logging,
-                "bool",
-                "Enable debug logging to the console"
+            "logging_level": (
+                self.logging_level,
+                "choice",
+                "Debug logging level (only logs when the app is in debug mode)",
+                self.LOGGING_LEVELS
             ),
         }
 
@@ -509,8 +531,8 @@ class OpenAITranslatePlugin(HookPlugin):
                 return False
             return False
 
-        if name == "debug_logging":
-            self.debug_logging = bool(value)
+        if name == "logging_level" and value in self.LOGGING_LEVELS:
+            self.logging_level = value
             return True
 
         return False

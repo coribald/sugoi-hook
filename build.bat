@@ -51,7 +51,6 @@ python -m nuitka ^
     --include-package=win32gui ^
     --include-package=win32ui ^
     --include-package=win32con ^
-    --include-package=win32api ^
     --include-package=win32process ^
     --follow-imports ^
     --assume-yes-for-downloads ^
