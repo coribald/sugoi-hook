@@ -12,8 +12,8 @@ A Windows GUI for attaching to game processes, selecting text hooks, processing 
 - Updated the build scripts to match the current repo layout and preserve runtime `*_config.json` files across clean builds.
 - Reworked the main UI layout: fixed header, better section collapsing, compact/full geometry restore, clearer hook/process flow, and split `Session Events` / `Session Output`.
 - Improved plugin management with explicit controls, better defaults, and a live preview in the Overlay Window settings.
-- Stabilized the text pipeline: shared pre-translation flow, clipboard alignment with translator input, safer Hook Concatenation behavior, and less aggressive duplicate filtering.
-- Expanded debugging and runtime logging, including console-visible pipeline tracing and full outbound OpenAI payload logging.
+- Stabilized the text pipeline: shared pre-translation flow, clipboard alignment with translator input, async latest-wins output processing, safer Hook Concatenation behavior, and less aggressive duplicate filtering.
+- Expanded debugging and runtime logging, including console-visible pipeline tracing and sanitized outbound OpenAI payload logging.
 - Added support for `gpt-4o` and `gpt-4o-mini` in the OpenAI translation plugin.
 
 ## Contact
@@ -158,6 +158,20 @@ Current behavior supports:
 - `dialogue_hook_id`
 - `prefix_hook_ids`
 - `speaker_wait_ms`
+- `clipboard_output_mode`
+- `max_dialogue_length`
+- burst suppression / post-burst recovery for skip-mode churn
+
+For Luna, hook selectors can now be:
+
+- numeric hook IDs like `1` or `2`
+- Luna function labels like `EXBWX0@25C880`
+- full Luna `context_info` values
+
+The hook list context menu can also set Hook Concatenation roles directly:
+
+- `Set as Dialogue Hook`
+- `Set as Prefix Hook`
 
 That lets the plugin briefly wait for a late-arriving speaker line without stalling forever when narration or monologue has no speaker hook at all.
 
@@ -170,6 +184,7 @@ Important behavior:
 - translation plugins receive the cleaned untranslated line
 - clipboard gets that same untranslated translator input
 - rolling original-line context can be sent to OpenAI for continuity
+- output processing is async and latest-wins, so rapidly advancing lines does not force the UI to catch up one stale translation at a time
 
 ### Plugin Management
 
@@ -216,7 +231,7 @@ Current traces include:
 - translation request / response logging
 - clipboard and final output decisions
 
-When OpenAI debug logging is enabled, the plugin prints the full outbound request payload to the console.
+When OpenAI debug logging is enabled, the plugin prints a sanitized outbound request payload plus raw API responses to the console.
 
 ## File Structure
 

@@ -24,6 +24,10 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
 
 - Process/hook/output flow is source-first during iteration. We are mostly running from the `.py` path, not rebuilding constantly.
 - The plugin pipeline now has a shared pre-translation stage so translator input and clipboard input can stay aligned.
+- Output processing is asynchronous and latest-wins:
+  - only one translation/output worker runs at a time
+  - new lines replace older pending work
+  - stale completed results are discarded instead of being appended late
 - Hook Concatenation is stateful and timing-sensitive. It should be treated carefully because many downstream behaviors depend on its output.
 - Translation plugins are expected to receive the cleaned untranslated line, not raw hook text.
 - The app now logs a lot of pipeline detail to both `sugoihook-runtime.log` and the source-run console.
@@ -47,7 +51,18 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
   - `dialogue_hook_id`
   - `prefix_hook_ids`
   - `speaker_wait_ms`
+- Hook Concatenation also now supports:
+  - Luna function-label selectors like `EXBWX0@25C880`
+  - full Luna `context_info` selectors
+  - `clipboard_output_mode`
+  - `max_dialogue_length`
+  - burst suppression and post-burst recovery
 - Prefix-only lines now flush after the same timeout instead of disappearing.
+- Hook list context menu can:
+  - copy hook ID
+  - copy Luna context info
+  - copy hook function label
+  - set a hook directly as concat dialogue/prefix
 - `remove_duplicates.py` was rewritten to suppress only immediate repeats rather than broad substring/seen-before matches.
 
 ## Logging / Debugging State
@@ -60,7 +75,7 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
   - final display/clipboard decisions
 - `plugins/hook_concatenation.py` emits `[HOOK CONCAT] ...` logs for buffered prefixes/dialogue, waits, and emits.
 - `plugins/remove_empty.py`, `plugins/fix_repeated_chars.py`, and `plugins/remove_duplicates.py` now log their in/out behavior.
-- `plugins/openai_translate.py` now prints the full outbound payload to the console.
+- `plugins/openai_translate.py` now prints a sanitized outbound payload plus raw API responses to the console.
 
 ## OpenAI Plugin State
 
@@ -74,20 +89,20 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
 - For `gpt-4o` / `gpt-4o-mini`, requested `low` verbosity is automatically raised to `medium`.
 - There is a no-op safeguard: if the model returns the source text unchanged, it is treated as no translation.
 - Rolling original-line context is enabled and was fixed so it actually reaches the translator path.
+- Long-idle stale HTTP sessions are retried once by resetting the `requests.Session()`.
 
 ## Prompt / Config State
 
-The OpenAI translation config now includes guidance for:
+The OpenAI translation config currently centers on:
 
-- preserving/formatting speaker labels
-- not rewriting `Speaker: "Dialogue"` into prose like `Speaker said, "..."`
-- preferring romanized familial honorifics like `Nii-san`
-- preserving quotation marks for spoken dialogue
+- faithful translation over paraphrase
+- preserving ambiguity when the source is genuinely ambiguous
+- avoiding guessed gender/pronouns when context is insufficient
 
 If behavior looks wrong, inspect:
 
 - `plugins_config.json`
-- the full outbound payload log from `openai_translate.py`
+- the sanitized outbound payload log from `openai_translate.py`
 
 ## Overlay Window State
 
@@ -122,6 +137,8 @@ If behavior looks wrong, inspect:
 - repaired rolling OpenAI context so previous lines actually reach the prompt
 - aligned clipboard with translator input
 - fixed Hook Concatenation timing/output edge cases
+- added latest-wins async output processing
+- added Luna selector support and direct concat role assignment from the hook list
 - fixed duplicate suppression so valid concatenated lines are not dropped
 - expanded pipeline debugging across the full text flow
 - added `gpt-4o` and `gpt-4o-mini` to the OpenAI plugin
