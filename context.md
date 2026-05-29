@@ -86,6 +86,11 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
 - `plugins/hook_concatenation.py` emits `[HOOK CONCAT] ...` logs for buffered prefixes/dialogue, waits, and emits.
 - `plugins/min_length_filter.py`, `plugins/fix_repeated_chars.py`, and `plugins/remove_duplicates.py` now log their in/out behavior.
 - `plugins/openai_translate.py` now prints a sanitized outbound payload plus raw API responses to the console.
+  - only when the app is running in global debug mode
+  - actual verbosity is controlled by the plugin `logging_level` setting:
+    - `minimal`
+    - `debug`
+    - `noisy`
 
 ## OpenAI Plugin State
 
@@ -138,6 +143,7 @@ If behavior looks wrong, inspect:
 - If packaged behavior is revisited:
   - remember earlier fixes around Tk packaging, logging, and elevation heuristics
   - current packaged builds are Luna-only
+  - current onefile builds store persistent config/log files beside `SugoiHook.exe`, while bundled runtime assets are extracted to the temporary onefile runtime folder
 
 ## Today’s High-Level Changelog
 

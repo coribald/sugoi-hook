@@ -18,6 +18,7 @@ A Windows GUI for attaching to game processes, selecting text hooks, processing 
 - Stabilized the text pipeline: shared pre-translation flow, clipboard alignment with translator input, async latest-wins output processing, safer Hook Concatenation behavior, and less aggressive duplicate filtering.
 - Expanded debugging and runtime logging, including console-visible pipeline tracing and sanitized outbound OpenAI payload logging.
 - Added support for `gpt-4o` and `gpt-4o-mini` in the OpenAI translation plugin.
+- Finalized the onefile release path, including persistent config/log files beside the exe and bundled plain/debug shortcuts.
 
 ## Contact
 
@@ -117,6 +118,11 @@ Current build behavior:
 - uses repo-local pip and Nuitka caches
 - includes the runtime asset folders used by the app
 - preserves runtime `*_config.json` files across clean builds
+- release onefile output includes:
+  - `SugoiHook.exe`
+  - `SugoiHook v0.6x.lnk`
+  - `SugoiHook v0.6x (debug).lnk`
+- onefile runtime assets are bundled into the exe, while persistent files live beside it
 
 ## How to Use
 
@@ -216,6 +222,8 @@ Useful local state files:
 - `sugoihook-runtime.log`
   - runtime log file
 
+For the onefile release build, these files live beside `SugoiHook.exe`.
+
 ## Logging and Debugging
 
 The app has expanded runtime tracing intended for source-mode debugging.
@@ -228,7 +236,7 @@ Current traces include:
 - translation request / response logging
 - clipboard and final output decisions
 
-When OpenAI debug logging is enabled, the plugin prints a sanitized outbound request payload plus raw API responses to the console.
+OpenAI logging only emits when the app itself is running in debug mode, and the plugin now supports `minimal`, `debug`, and `noisy` logging levels.
 
 ## File Structure
 
