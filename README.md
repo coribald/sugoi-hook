@@ -2,13 +2,16 @@
 
 A Windows GUI for attaching to game processes, selecting text hooks, processing extracted text through plugins, and optionally translating or displaying it in an overlay.
 
-![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)
 
 ## Recent Changes
 
-- Added a cleaner source-run workflow with `run_debug.*` and `run_normal.*` launchers.
+- Converted the app to a Luna-only hook engine build and removed Textractor packaging/runtime paths.
+- Renamed the plugin base layer from `TextractorPlugin` to `HookPlugin` and cleaned up Luna-only app naming.
+- Reworked the old Google plugin into a configurable `Deep Translator` plugin with reactive provider-specific settings.
+- Moved the vendored translation package to top-level `deep_translator/` and removed the old `Translator/` wrapper folder.
 - Updated the build scripts to match the current repo layout and preserve runtime `*_config.json` files across clean builds.
 - Reworked the main UI layout: fixed header, better section collapsing, compact/full geometry restore, clearer hook/process flow, and split `Session Events` / `Session Output`.
 - Improved plugin management with explicit controls, better defaults, and a live preview in the Overlay Window settings.
@@ -26,18 +29,13 @@ For support or discussion, join the **Sugoi Toolkit Discord Server**:
 
 ## Features
 
-### Engine Support
+### Hook Engine
 
-Sugoi Hook supports two hooking engines:
+Sugoi Hook is currently packaged as a Luna-only build:
 
 - **Luna Hook**
   - good compatibility with many modern games
-  - default engine in the UI
-- **Textractor**
-  - classic hook workflow with broad compatibility
-  - useful fallback for titles that behave better on Textractor
-
-The engine selector lives in the fixed app header. Switching engines detaches the current session and reinitializes the hook flow.
+  - the only bundled hook engine in the current app/builds
 
 ### Core Workflow
 
@@ -68,15 +66,16 @@ The engine selector lives in the fixed app header. Switching engines detaches th
 - **Remove Special Characters**
 - **Minimum Length Filter**
 - **Fix Repeated Characters**
-- **Google Translate**
+- **Deep Translator**
+  - configurable `deep_translator` backend
+  - includes Google, MyMemory, and optional API-backed services such as DeepL, Microsoft, LibreTranslate, Papago, QCRI, Baidu, Tencent, and Yandex
+  - provider-specific settings update live inside the same configuration dialog
 - **OpenAI Translate**
   - rolling original-line context
   - story / character context and instruction fields
   - support for `gpt-5-mini`, `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and `gpt-4.1-mini`
 - **Translation Proxy**
   - forwards extracted text to Translator++
-- **Renji WebSocket**
-  - sends Japanese text to Renji for reading-tracker workflows
 - **Overlay Window**
   - on-screen text overlay with configurable fonts, colors, opacity, and saved position/size
 
@@ -85,9 +84,7 @@ The engine selector lives in the fixed app header. Switching engines detaches th
 ### Prerequisites
 
 - Windows 10/11
-- Python 3.9+ if running from source with your own interpreter
-
-This repo also includes a local `Python39` runtime used by the provided launch scripts.
+- Python 3.11+ if running from source or building from your own environment
 
 ### Run From Source
 
@@ -97,12 +94,9 @@ cd sugoi-hook
 python SugoiHook_gui.py
 ```
 
-Helpful launchers in this repo:
+For verbose runtime logging:
 
-- `run_debug.bat` / `run_debug.ps1`
-  - launches source mode in Windows Terminal for debugging / console visibility
-- `run_normal.bat` / `run_normal.ps1`
-  - launches source mode in the normal user context
+- `python SugoiHook_gui.py --debug`
 
 ### Build Executables
 
@@ -198,6 +192,8 @@ Current plugin controls support:
 
 Many plugin settings are persisted through `plugins_config.json`.
 
+For `Deep Translator`, the visible settings are conditional on the selected provider.
+
 ### Overlay Window
 
 The overlay plugin:
@@ -212,6 +208,7 @@ Useful local state files:
 
 - `plugins_config.json`
   - plugin settings, active plugins, main window geometry
+  - plugin file names are the config keys, so renaming a plugin file creates a fresh config entry
 - `overlay_config.json`
   - overlay appearance and geometry
 - `game_profiles.json`
@@ -239,16 +236,10 @@ When OpenAI debug logging is enabled, the plugin prints a sanitized outbound req
 sugoi-hook/
 ├── SugoiHook_gui.py
 ├── plugins/
-├── textractor_builds/
 ├── luna_builds/
-├── Translator/
-├── Python39/
+├── deep_translator/
 ├── build.bat
 ├── build_debug_standalone.bat
-├── run_debug.bat
-├── run_debug.ps1
-├── run_normal.bat
-├── run_normal.ps1
 ├── plugins_config.json
 ├── overlay_config.json
 ├── game_profiles.json
@@ -259,14 +250,7 @@ sugoi-hook/
 
 Sugoi Hook builds on several open-source projects and community contributions.
 
-### Hooking Engines
-
-#### Textractor
-
-This project integrates [Textractor](https://github.com/Chenx221/Textractor), a modified version of the original Textractor by Artikash.
-
-- **Original Textractor**: [Artikash/Textractor](https://github.com/Artikash/Textractor)
-- **Modified Textractor**: [Chenx221/Textractor](https://github.com/Chenx221/Textractor)
+### Hooking Engine
 
 #### Luna Hook
 

@@ -3,7 +3,7 @@ try:
     import tkinter.font as tkfont
 except ImportError:
     tkfont = None
-from plugins import TextractorPlugin
+from plugins import HookPlugin
 import sys
 import json
 import re
@@ -23,7 +23,7 @@ def get_runtime_user_data_path() -> Path:
     return Path(__file__).parent.parent
 
 
-class OverlayWindowPlugin(TextractorPlugin):
+class OverlayWindowPlugin(HookPlugin):
     name = "Overlay Window"
     description = "Displays text in a transparent overlay window."
     version = "2.0"

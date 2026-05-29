@@ -7,11 +7,11 @@ symbols, or repeated decorative patterns.
 """
 
 import re
-from plugins import TextractorPlugin
+from plugins import HookPlugin
 from typing import Optional
 
 
-class RemoveSpecialCharsPlugin(TextractorPlugin):
+class RemoveSpecialCharsPlugin(HookPlugin):
     """
     Filters out text that consists only of special characters.
     

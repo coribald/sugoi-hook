@@ -6,7 +6,7 @@ Filters out immediate duplicate text while still allowing a line to recur later.
 Also removes inline duplicates where the same text appears twice in a row.
 """
 
-from plugins import TextractorPlugin
+from plugins import HookPlugin
 
 
 def runtime_debug_logging_enabled() -> bool:
@@ -21,7 +21,7 @@ import os
 import sys
 
 
-class RemoveDuplicatesPlugin(TextractorPlugin):
+class RemoveDuplicatesPlugin(HookPlugin):
     """
     Filters out immediate duplicate text entries.
 

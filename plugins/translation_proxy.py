@@ -9,7 +9,7 @@ For more information: https://dreamsavior.net
 """
 
 import requests
-from plugins import TextractorPlugin
+from plugins import HookPlugin
 from typing import Optional
 
 # ============================================================================
@@ -22,7 +22,7 @@ REQUEST_TIMEOUT = 10  # Timeout in seconds for translation requests
 # ============================================================================
 
 
-class TranslatorPlusPlusPlugin(TextractorPlugin):
+class TranslatorPlusPlusPlugin(HookPlugin):
     """
     Translates using Translator++ Translation Proxy.
     

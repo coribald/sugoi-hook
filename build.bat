@@ -35,10 +35,9 @@ REM Avoid forced stdout/stderr redirection here; in onefile mode it causes
 REM an early native APPCRASH before Python startup on some Windows systems.
 python -m nuitka ^
     --onefile ^
-    --include-raw-dir=textractor_builds=textractor_builds ^
     --include-raw-dir=luna_builds=luna_builds ^
+    --include-raw-dir=deep_translator=deep_translator ^
     --include-raw-dir=plugins=plugins ^
-    --include-raw-dir=Translator=Translator ^
     --include-data-files=logo.webp=logo.webp ^
     --include-data-files=logo.ico=logo.ico ^
     --windows-icon-from-ico=logo.ico ^
@@ -54,7 +53,6 @@ python -m nuitka ^
     --include-package=win32con ^
     --include-package=win32api ^
     --include-package=win32process ^
-    --include-package=websocket_server ^
     --follow-imports ^
     --assume-yes-for-downloads ^
     --windows-console-mode=disable ^

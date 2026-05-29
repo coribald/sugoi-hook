@@ -5,11 +5,11 @@ Minimum Length Filter Plugin
 Filters out text that is shorter than a specified minimum length.
 """
 
-from plugins import TextractorPlugin
+from plugins import HookPlugin
 from typing import Optional
 
 
-class MinLengthFilterPlugin(TextractorPlugin):
+class MinLengthFilterPlugin(HookPlugin):
     """
     Filters out text that is too short.
     

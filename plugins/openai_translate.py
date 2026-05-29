@@ -14,7 +14,7 @@ from collections import deque
 import requests
 from typing import Optional
 
-from plugins import TextractorPlugin
+from plugins import HookPlugin
 
 
 def runtime_debug_logging_enabled() -> bool:
@@ -25,7 +25,7 @@ def runtime_debug_logging_enabled() -> bool:
     return env_enabled or argv_enabled
 
 
-class OpenAITranslatePlugin(TextractorPlugin):
+class OpenAITranslatePlugin(HookPlugin):
     name = "OpenAI Translate"
     description = "Translates text using OpenAI with optional story and character context"
     version = "1.0"

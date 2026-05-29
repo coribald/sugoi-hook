@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 SugoiHook GUI - Modern Text Extraction Interface
-Built on top of Textractor by Artikash (https://github.com/Chenx221/Textractor)
 """
 
 import tkinter as tk
@@ -97,7 +96,7 @@ except ImportError:
     TRAY_AVAILABLE = False
 
 try:
-    from plugins import TextractorPlugin
+    from plugins import HookPlugin
     PLUGINS_AVAILABLE = True
 except ImportError:
     PLUGINS_AVAILABLE = False
@@ -192,7 +191,7 @@ def setup_runtime_logging():
     except Exception:
         traceback.print_exc()
         return None
-class ModernTextractorGUI:
+class SugoiHookGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("SugoiHook v0.6x")
@@ -203,7 +202,7 @@ class ModernTextractorGUI:
         self.dark_colors = {
             'bg': '#1e1e2e',
             'fg': '#cdd6f4',
-            'primary': '#89b4fa',
+            'primary': "#a09dfb",
             'secondary': '#f38ba8',
             'success': '#a6e3a1',
             'warning': '#f9e2af',
@@ -218,7 +217,7 @@ class ModernTextractorGUI:
         self.light_colors = {
             'bg': '#eff1f5',
             'fg': '#4c4f69',
-            'primary': '#1e66f5',
+            'primary': '#a09dfb',
             'secondary': '#d20f39',
             'success': '#40a02b',
             'warning': '#df8e1d',
@@ -363,8 +362,7 @@ class ModernTextractorGUI:
             'winword.exe', 'excel.exe', 'powerpnt.exe', 'outlook.exe',
             'acrobat.exe', 'acrord32.exe', 'foxit reader.exe',
             'notepad.exe', 'mspaint.exe', 'calc.exe', 'snippingtool.exe',
-            'textractor.exe', 'textractorcli.exe', 'textractorgui.exe',
-            'textractor_gui.exe' , 'sugoi_hook.exe'
+            'sugoi_hook.exe'
         }
         
         # Determine CLI paths - handle both development and compiled modes
@@ -393,36 +391,26 @@ class ModernTextractorGUI:
         self.game_profiles_path = self.user_data_dir / "game_profiles.json"
         
         # Engine executable paths
-        self.textractor_x86_path = self.base_path / "textractor_builds" / "_x86" / "TextractorCLI.exe"
-        self.textractor_x64_path = self.base_path / "textractor_builds" / "_x64" / "TextractorCLI.exe"
         self.luna_x86_path = self.base_path / "luna_builds" / "LunaHostCLI32.exe"
         self.luna_x64_path = self.base_path / "luna_builds" / "LunaHostCLI64.exe"
         self.logo_path = self.base_path / "logo.webp"
         
-        # Engine selection - Luna as default
+        # Luna-only build
         self.current_engine = "luna"
         
         # Initialize plugin system
         self.init_plugin_system()
         self.apply_saved_window_geometry()
         
-        # Check if CLI executables exist for both engines
-        textractor_exists = self.textractor_x86_path.exists() or self.textractor_x64_path.exists()
+        # Check that Luna CLI executables exist
         luna_exists = self.luna_x86_path.exists() or self.luna_x64_path.exists()
         
-        if not textractor_exists and not luna_exists:
+        if not luna_exists:
             messagebox.showerror("Error", 
-                "No hook engine executables found!\n\n"
+                "No Luna hook engine executables found!\n\n"
                 "Expected locations:\n"
-                f"Textractor: {self.textractor_x86_path} or {self.textractor_x64_path}\n"
                 f"Luna: {self.luna_x86_path} or {self.luna_x64_path}")
             sys.exit(1)
-        
-        # Set default engine based on availability
-        if not luna_exists and textractor_exists:
-            self.current_engine = "textractor"
-        elif not textractor_exists and luna_exists:
-            self.current_engine = "luna"
         
         self.setup_modern_theme()
         self.set_window_icon()
@@ -788,7 +776,7 @@ class ModernTextractorGUI:
         else:
             process_text = "Not attached"
 
-        engine_text = f"Engine: {'Luna' if self.current_engine == 'luna' else 'Textractor'}"
+        engine_text = "Engine: Luna"
         self.hook_status_summary.config(
             text=f"{process_text} | {engine_text}",
             foreground=self.colors['success'] if self.attached_pid else self.colors['text_dim']
@@ -864,18 +852,18 @@ class ModernTextractorGUI:
             sys.modules[plugin_name] = module
             spec.loader.exec_module(module)
             
-            # Look for a 'plugin' instance or a class that inherits from TextractorPlugin
+            # Look for a 'plugin' instance or a class that inherits from HookPlugin
             plugin_instance = None
             
             if hasattr(module, 'plugin'):
                 plugin_instance = module.plugin
             else:
-                # Look for a class that inherits from TextractorPlugin
+                # Look for a class that inherits from HookPlugin
                 for attr_name in dir(module):
                     attr = getattr(module, attr_name)
                     if (isinstance(attr, type) and 
-                        issubclass(attr, TextractorPlugin) and 
-                        attr is not TextractorPlugin):
+                        issubclass(attr, HookPlugin) and 
+                        attr is not HookPlugin):
                         plugin_instance = attr()
                         break
             
@@ -1346,7 +1334,7 @@ class ModernTextractorGUI:
                 else:
                     # Remove the file if it's not a valid plugin
                     dest_path.unlink()
-                    messagebox.showerror("Error", "The selected file is not a valid Textractor plugin.")
+                    messagebox.showerror("Error", "The selected file is not a valid SugoiHook plugin.")
                     
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to add plugin:\n{str(e)}")
@@ -1480,7 +1468,15 @@ class ModernTextractorGUI:
             return
 
         plugin = self.plugins[plugin_filename]
-        settings = plugin.get_settings()
+        dynamic_settings_fn = getattr(plugin, 'get_settings_for_values', None)
+        draft_values = {}
+
+        def get_dialog_settings():
+            if callable(dynamic_settings_fn):
+                return dynamic_settings_fn(draft_values)
+            return plugin.get_settings()
+
+        settings = get_dialog_settings()
 
         if not settings:
             self.notify_user(f"Plugin '{plugin_name}' has no configurable settings.", level='info')
@@ -1633,141 +1629,169 @@ class ModernTextractorGUI:
             except Exception:
                 pass
 
-        for setting_name, setting_info in settings.items():
-            current_value, value_type, description, *options = setting_info
-            options = options[0] if options else None
+        def collect_current_draft_values():
+            for setting_name, (var, options, value_type) in setting_widgets.items():
+                draft_values[setting_name] = resolve_setting_value(var, options, value_type)
 
-            setting_frame = ttk.Frame(scrollable_frame)
-            setting_frame.pack(fill=tk.X, pady=8, padx=5)
+        def render_settings_form():
+            nonlocal setting_widgets
+            collect_current_draft_values()
+            setting_widgets = {}
 
-            ttk.Label(
-                setting_frame,
-                text=description + ":",
-                font=('Segoe UI', 10, 'bold'),
-                foreground=self.colors['fg']
-            ).pack(anchor=tk.W, pady=(0, 5))
+            for child in scrollable_frame.winfo_children():
+                child.destroy()
 
-            if value_type == 'color' and options:
-                color_frame = ttk.Frame(setting_frame)
-                color_frame.pack(fill=tk.X)
-                var = tk.StringVar(value=current_value)
-                combo = ttk.Combobox(color_frame, textvariable=var, width=35)
-                combo['values'] = [f"{key} - {value}" for key, value in options.items()]
-                if current_value in options:
-                    combo.set(f"{current_value} - {options[current_value]}")
-                combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+            current_settings = get_dialog_settings()
 
-                preview_canvas = tk.Canvas(
-                    color_frame,
-                    width=40,
-                    height=25,
-                    bg=current_value,
-                    highlightthickness=1,
-                    highlightbackground=self.colors['border']
-                )
-                preview_canvas.pack(side=tk.LEFT)
+            for setting_name, setting_info in current_settings.items():
+                current_value, value_type, description, *options = setting_info
+                options = options[0] if options else None
 
-                def update_preview(event=None, combo=combo, preview_canvas=preview_canvas):
-                    selected = combo.get()
-                    if ' - ' in selected:
-                        color_code = selected.split(' - ')[0]
-                        try:
-                            preview_canvas.config(bg=color_code)
-                        except Exception:
-                            pass
-                    refresh_overlay_preview()
+                if setting_name in draft_values:
+                    current_value = draft_values[setting_name]
 
-                combo.bind('<<ComboboxSelected>>', update_preview)
-                combo.bind('<KeyRelease>', update_preview)
-                setting_widgets[setting_name] = (var, options, value_type)
+                setting_frame = ttk.Frame(scrollable_frame)
+                setting_frame.pack(fill=tk.X, pady=8, padx=5)
 
-            elif value_type == 'int_slider' and options:
-                slider_frame = ttk.Frame(setting_frame)
-                slider_frame.pack(fill=tk.X)
-                var = tk.IntVar(value=current_value)
-                value_label = ttk.Label(
-                    slider_frame,
-                    text=str(current_value),
+                ttk.Label(
+                    setting_frame,
+                    text=description + ":",
                     font=('Segoe UI', 10, 'bold'),
-                    foreground=self.colors['primary']
-                )
-                value_label.pack(side=tk.RIGHT, padx=(10, 0))
-                slider = tk.Scale(
-                    slider_frame,
-                    from_=options['min'],
-                    to=options['max'],
-                    orient=tk.HORIZONTAL,
-                    variable=var,
-                    bg=self.colors['surface'],
-                    fg=self.colors['fg'],
-                    highlightthickness=0,
-                    troughcolor=self.colors['surface_light'],
-                    activebackground=self.colors['primary'],
-                    command=lambda v, label=value_label: label.config(text=str(int(float(v))))
-                )
-                slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
-                var.trace_add('write', refresh_overlay_preview)
-                setting_widgets[setting_name] = (var, options, value_type)
+                    foreground=self.colors['fg']
+                ).pack(anchor=tk.W, pady=(0, 5))
 
-            elif value_type == 'choice' and options:
-                var = tk.StringVar(value=current_value)
-                combo = ttk.Combobox(setting_frame, textvariable=var)
-                combo['values'] = [options.get(key, key) for key in options.keys()]
-                if current_value in options:
-                    combo.set(options[current_value])
-                combo.pack(fill=tk.X)
-                combo.bind('<<ComboboxSelected>>', refresh_overlay_preview)
-                combo.bind('<KeyRelease>', refresh_overlay_preview)
-                setting_widgets[setting_name] = (var, options, value_type)
+                if value_type == 'color' and options:
+                    color_frame = ttk.Frame(setting_frame)
+                    color_frame.pack(fill=tk.X)
+                    var = tk.StringVar(value=current_value)
+                    combo = ttk.Combobox(color_frame, textvariable=var, width=35)
+                    combo['values'] = [f"{key} - {value}" for key, value in options.items()]
+                    if current_value in options:
+                        combo.set(f"{current_value} - {options[current_value]}")
+                    combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
 
-            elif value_type == 'bool':
-                var = tk.BooleanVar(value=current_value)
-                check = ttk.Checkbutton(setting_frame, text="Enabled", variable=var)
-                check.pack(anchor=tk.W)
-                var.trace_add('write', refresh_overlay_preview)
-                setting_widgets[setting_name] = (var, None, value_type)
+                    preview_canvas = tk.Canvas(
+                        color_frame,
+                        width=40,
+                        height=25,
+                        bg=current_value,
+                        highlightthickness=1,
+                        highlightbackground=self.colors['border']
+                    )
+                    preview_canvas.pack(side=tk.LEFT)
 
-            elif value_type == 'int':
-                var = tk.IntVar(value=current_value)
-                entry = ttk.Entry(setting_frame, textvariable=var)
-                entry.pack(fill=tk.X)
-                var.trace_add('write', refresh_overlay_preview)
-                setting_widgets[setting_name] = (var, None, value_type)
+                    def update_preview(event=None, combo=combo, preview_canvas=preview_canvas):
+                        selected = combo.get()
+                        if ' - ' in selected:
+                            color_code = selected.split(' - ')[0]
+                            try:
+                                preview_canvas.config(bg=color_code)
+                            except Exception:
+                                pass
+                        refresh_overlay_preview()
 
-            elif value_type == 'secret':
-                var = tk.StringVar(value=current_value)
-                entry = ttk.Entry(setting_frame, textvariable=var, show='*')
-                entry.pack(fill=tk.X)
-                setting_widgets[setting_name] = (var, None, value_type)
+                    combo.bind('<<ComboboxSelected>>', update_preview)
+                    combo.bind('<KeyRelease>', update_preview)
+                    setting_widgets[setting_name] = (var, options, value_type)
 
-            elif value_type == 'multiline_str':
-                text_frame = ttk.Frame(setting_frame)
-                text_frame.pack(fill=tk.BOTH, expand=True)
-                text_frame.columnconfigure(0, weight=1)
-                text_frame.rowconfigure(0, weight=1)
-                text_widget = tk.Text(
-                    text_frame,
-                    height=10,
-                    wrap=tk.WORD,
-                    bg=self.colors['surface'],
-                    fg=self.colors['fg'],
-                    insertbackground=self.colors['fg'],
-                    relief=tk.FLAT,
-                    borderwidth=1
-                )
-                text_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
-                text_widget.configure(yscrollcommand=text_scrollbar.set)
-                text_widget.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-                text_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-                if current_value:
-                    text_widget.insert('1.0', current_value)
-                setting_widgets[setting_name] = (text_widget, None, value_type)
+                elif value_type == 'int_slider' and options:
+                    slider_frame = ttk.Frame(setting_frame)
+                    slider_frame.pack(fill=tk.X)
+                    var = tk.IntVar(value=current_value)
+                    value_label = ttk.Label(
+                        slider_frame,
+                        text=str(current_value),
+                        font=('Segoe UI', 10, 'bold'),
+                        foreground=self.colors['primary']
+                    )
+                    value_label.pack(side=tk.RIGHT, padx=(10, 0))
+                    slider = tk.Scale(
+                        slider_frame,
+                        from_=options['min'],
+                        to=options['max'],
+                        orient=tk.HORIZONTAL,
+                        variable=var,
+                        bg=self.colors['surface'],
+                        fg=self.colors['fg'],
+                        highlightthickness=0,
+                        troughcolor=self.colors['surface_light'],
+                        activebackground=self.colors['primary'],
+                        command=lambda v, label=value_label: label.config(text=str(int(float(v))))
+                    )
+                    slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                    var.trace_add('write', refresh_overlay_preview)
+                    setting_widgets[setting_name] = (var, options, value_type)
 
-            else:
-                var = tk.StringVar(value=current_value)
-                entry = ttk.Entry(setting_frame, textvariable=var)
-                entry.pack(fill=tk.X)
-                setting_widgets[setting_name] = (var, None, value_type)
+                elif value_type == 'choice' and options:
+                    var = tk.StringVar(value=current_value)
+                    combo = ttk.Combobox(setting_frame, textvariable=var)
+                    combo['values'] = [options.get(key, key) for key in options.keys()]
+                    if current_value in options:
+                        combo.set(options[current_value])
+                    combo.pack(fill=tk.X)
+
+                    def on_choice_change(event=None, setting_name=setting_name, var=var, options=options, value_type=value_type):
+                        draft_values[setting_name] = resolve_setting_value(var, options, value_type)
+                        refresh_overlay_preview()
+                        if setting_name == 'provider' and callable(dynamic_settings_fn):
+                            render_settings_form()
+
+                    combo.bind('<<ComboboxSelected>>', on_choice_change)
+                    combo.bind('<KeyRelease>', refresh_overlay_preview)
+                    setting_widgets[setting_name] = (var, options, value_type)
+
+                elif value_type == 'bool':
+                    var = tk.BooleanVar(value=current_value)
+                    check = ttk.Checkbutton(setting_frame, text="Enabled", variable=var)
+                    check.pack(anchor=tk.W)
+                    var.trace_add('write', refresh_overlay_preview)
+                    setting_widgets[setting_name] = (var, None, value_type)
+
+                elif value_type == 'int':
+                    var = tk.IntVar(value=current_value)
+                    entry = ttk.Entry(setting_frame, textvariable=var)
+                    entry.pack(fill=tk.X)
+                    var.trace_add('write', refresh_overlay_preview)
+                    setting_widgets[setting_name] = (var, None, value_type)
+
+                elif value_type == 'secret':
+                    var = tk.StringVar(value=current_value)
+                    entry = ttk.Entry(setting_frame, textvariable=var, show='*')
+                    entry.pack(fill=tk.X)
+                    setting_widgets[setting_name] = (var, None, value_type)
+
+                elif value_type == 'multiline_str':
+                    text_frame = ttk.Frame(setting_frame)
+                    text_frame.pack(fill=tk.BOTH, expand=True)
+                    text_frame.columnconfigure(0, weight=1)
+                    text_frame.rowconfigure(0, weight=1)
+                    text_widget = tk.Text(
+                        text_frame,
+                        height=10,
+                        wrap=tk.WORD,
+                        bg=self.colors['surface'],
+                        fg=self.colors['fg'],
+                        insertbackground=self.colors['fg'],
+                        relief=tk.FLAT,
+                        borderwidth=1
+                    )
+                    text_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+                    text_widget.configure(yscrollcommand=text_scrollbar.set)
+                    text_widget.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+                    text_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+                    if current_value:
+                        text_widget.insert('1.0', current_value)
+                    setting_widgets[setting_name] = (text_widget, None, value_type)
+
+                else:
+                    var = tk.StringVar(value=current_value)
+                    entry = ttk.Entry(setting_frame, textvariable=var)
+                    entry.pack(fill=tk.X)
+                    setting_widgets[setting_name] = (var, None, value_type)
+
+            refresh_overlay_preview()
+
+        render_settings_form()
 
         if plugin_filename == 'overlay_window.py':
             preview_card = ttk.Frame(container, style="Card.TFrame", padding=15)
@@ -1809,8 +1833,9 @@ class ModernTextractorGUI:
             if plugin_filename not in self.plugin_settings:
                 self.plugin_settings[plugin_filename] = {}
 
-            for setting_name, (var, options, value_type) in setting_widgets.items():
-                value = resolve_setting_value(var, options, value_type)
+            collect_current_draft_values()
+
+            for setting_name, value in draft_values.items():
                 plugin.set_setting(setting_name, value)
                 self.plugin_settings[plugin_filename][setting_name] = value
 
@@ -1956,15 +1981,6 @@ class ModernTextractorGUI:
             
             # Only show messages if not in silent launch mode
             if not self.silent_auto_launch:
-                # Check if we need to switch engine
-                saved_engine = profile.get('engine', 'luna')
-                if saved_engine != self.current_engine:
-                    self.append_event(f"🔄 Switching to {saved_engine} engine for this game...\n")
-                    # Note: Need to detach and reattach with correct engine
-                    # For now, just show a warning in the output
-                    self.append_event(f"⚠️ This game was saved with {saved_engine} engine.\n")
-                    self.append_event(f"   Currently using {self.current_engine}. Consider switching engines.\n\n")
-                
                 # Show notification
                 self.append_event(f"🔍 Found saved profile for {profile['exe_name']}\n")
                 self.append_event(f"⌛ Will auto-select hook: {profile['hook_function']}\n\n")
@@ -2278,7 +2294,7 @@ class ModernTextractorGUI:
         
         # Populate profiles
         for game_id, profile in self.game_profiles.items():
-            engine_name = "🌙 Luna" if profile.get('engine', 'luna') == 'luna' else "🔧 Textractor"
+            engine_name = "🌙 Luna"
             hook_type = "🔧 Manual" if profile['hook_type'] == 'manual' else "🎯 Auto"
             hook_info = profile.get('hook_data', 'Unknown')
             if profile['hook_type'] == 'auto':
@@ -2343,8 +2359,6 @@ class ModernTextractorGUI:
             
             profile = self.game_profiles[game_id]
             exe_path = profile.get('exe_path', '')
-            saved_engine = profile.get('engine', 'luna')
-            
             if not exe_path or not os.path.exists(exe_path):
                 messagebox.showerror("Error", 
                     f"Game executable not found:\n{exe_path}\n\n"
@@ -2354,12 +2368,6 @@ class ModernTextractorGUI:
             try:
                 # Set silent auto-launch flag to suppress hook messages
                 self.silent_auto_launch = True
-                
-                # Switch to the saved engine if different from current
-                if saved_engine != self.current_engine:
-                    self.append_event(f"🔄 Switching to {saved_engine} engine for this game...\n")
-                    self.current_engine = saved_engine
-                    self.engine_var.set(saved_engine)
                 
                 # Close the profile manager window
                 manager.destroy()
@@ -2730,30 +2738,12 @@ class ModernTextractorGUI:
         
         # Header
         
-        title_label = ttk.Label(header_frame, text="Sugoi Hook v0.6x", 
-                               font=('Segoe UI', 20, 'bold'),
+        title_label = ttk.Label(header_frame, text="🐾Sugoi Hook v0.6x", 
+                               font=('Segoe UI', 18, 'bold'),
                                foreground=self.colors['primary'])
         title_label.pack(side=tk.LEFT)
         
-        # Engine selection toggle
-        engine_frame = ttk.Frame(header_frame)
-        engine_frame.pack(side=tk.RIGHT)
-        
-        ttk.Label(engine_frame, text="Hook Engine:", 
-                 font=('Segoe UI', 9),
-                 foreground=self.colors['text_dim']).pack(side=tk.LEFT, padx=(0, 10))
-        
         self.engine_var = tk.StringVar(value=self.current_engine)
-        
-        engine_radio1 = ttk.Radiobutton(engine_frame, text="🌙 Hook 1 (Luna)", 
-                                        variable=self.engine_var, value="luna",
-                                        command=self.on_engine_change)
-        engine_radio1.pack(side=tk.LEFT, padx=(0, 10))
-        
-        engine_radio2 = ttk.Radiobutton(engine_frame, text="🔧 Hook 2 (Textractor)", 
-                                        variable=self.engine_var, value="textractor",
-                                        command=self.on_engine_change)
-        engine_radio2.pack(side=tk.LEFT)
         
         # Content area with a responsive selection row
         content_frame = ttk.Frame(main_container)
@@ -3597,15 +3587,10 @@ class ModernTextractorGUI:
         item = self.process_tree.item(selection[0])
         pid, arch, name = item['values']
         
-        # Select CLI path based on current engine
-        if self.engine_var.get() == "luna":
-            cli_path = self.luna_x86_path if arch == "x86" else self.luna_x64_path
-            if not cli_path.exists():
-                cli_path = self.luna_x86_path
-        else:  # textractor
-            cli_path = self.textractor_x86_path if arch == "x86" else self.textractor_x64_path
-            if not cli_path.exists():
-                cli_path = self.textractor_x86_path
+        # Luna-only build: always attach through Luna
+        cli_path = self.luna_x86_path if arch == "x86" else self.luna_x64_path
+        if not cli_path.exists():
+            cli_path = self.luna_x86_path
         
         try:
             # Get the directory containing the CLI executable
@@ -3789,7 +3774,7 @@ TIPS:
 • Start with simple hooks (HB4@0) and adjust as needed
 • Monitor the output to see if the hook captures text correctly
 
-For more information, refer to the Textractor documentation.
+For more information, refer to the Luna Hook documentation and current community hook guides.
 """
         
         # Create a custom dialog
@@ -3833,90 +3818,13 @@ For more information, refer to the Textractor documentation.
         help_window.geometry(f"+{x}+{y}")
     
     def on_engine_change(self):
-        """Handle engine toggle change"""
-        if self.attached_pid:
-            # Warn user about switching engines while attached
-            result = messagebox.askyesno(
-                "Switch Engine?",
-                f"Switching engines will detach the current process.\n\n"
-                f"Continue?"
-            )
-            if result:
-                self.detach_process()
-            else:
-                # Revert toggle to previous engine
-                self.engine_var.set(self.current_engine)
-                return
-        
-        # Update current engine
-        self.current_engine = self.engine_var.get()
+        """Luna-only build; engine selection is fixed."""
+        self.engine_var.set("luna")
+        self.current_engine = "luna"
     
     def read_cli_output(self):
-        """Read output from CLI process with engine-specific parsing"""
-        if self.engine_var.get() == "luna":
-            self.read_luna_output()
-        else:
-            self.read_textractor_output()
-    
-    def read_textractor_output(self):
-        """Read and parse Textractor CLI output"""
-        pattern = re.compile(r'^\[(\d+):([^:]+):([^:]+):([^:]+):([^:]+):([^:]+):([^\]]+)\] (.*)$')
-        console_pattern = re.compile(r'^\[Console\] (.+)$')
-        
-        while self.is_reading and self.cli_process:
-            try:
-                line = self.cli_process.stdout.readline()
-                if not line:
-                    break
-                
-                line = line.strip()
-                if not line:
-                    continue
-                
-                console_match = console_pattern.match(line)
-                if console_match:
-                    # Process console output in background thread
-                    text_to_process = f"[Console] {console_match.group(1)}\n"
-                    self.root.after(0, self.append_output, text_to_process, True, False)
-                    continue
-                
-                match = pattern.match(line)
-                if match:
-                    hook_id = match.group(1)
-                    thread_name = match.group(6)
-                    text = match.group(8)
-                    
-                    if hook_id not in self.hooks:
-                        self.hooks[hook_id] = {
-                            'id': hook_id,
-                            'function': thread_name,
-                            'context_info': context_info,
-                            'texts': []
-                        }
-                        self.root.after(0, self.add_hook_to_list, hook_id, thread_name)
-                    else:
-                        self.hooks[hook_id]['context_info'] = context_info
-                    
-                    # Store text and update preview - even if text is empty string
-                    # Only store up to 3 texts for memory efficiency
-                    if len(self.hooks[hook_id]['texts']) < 3:
-                        self.hooks[hook_id]['texts'].append(text)
-                    
-                    # Always update the preview with the latest text (even if empty)
-                    # This ensures the preview updates from "Waiting for text..." to actual content
-                    self.log_pipeline('hook.line_received', engine='textractor', hook_id=hook_id, text=text, selected=(self.selected_hook_id == hook_id), silent_auto_launch=self.silent_auto_launch)
-                    self.log_pipeline('hook.line_received', engine='luna', hook_id=hook_id, text=text, selected=(self.selected_hook_id == hook_id), silent_auto_launch=self.silent_auto_launch)
-                    self.root.after(0, self.update_hook_preview, hook_id, text)
-                    
-                    if self.selected_hook_id and hook_id == self.selected_hook_id:
-                        if text:
-                            self.root.after(0, self.append_output, text + "\n", True, True)
-                    elif not self.selected_hook_id and not self.silent_auto_launch:
-                        # Only show hook preview if not in silent auto-launch mode
-                        self.root.after(0, self.append_output, f"[Hook {hook_id}] {text}\n", True, False)
-                
-            except Exception:
-                break
+        """Read output from the Luna CLI process."""
+        self.read_luna_output()
     
     def read_luna_output(self):
         """Read and parse Luna Hook CLI output"""
@@ -4720,9 +4628,9 @@ def main():
 
     root.report_callback_exception = report_callback_exception
 
-    logging.info('Constructing ModernTextractorGUI.')
-    app = ModernTextractorGUI(root)
-    logging.info('ModernTextractorGUI constructed.')
+    logging.info('Constructing SugoiHookGUI.')
+    app = SugoiHookGUI(root)
+    logging.info('SugoiHookGUI constructed.')
     if runtime_debug_logging_enabled():
         logging.info(
             'App summary: active_engine=%s bundled_plugins_folder=%s user_plugins_folder=%s plugins_config_path=%s game_profiles_path=%s',

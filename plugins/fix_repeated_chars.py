@@ -6,7 +6,7 @@ Fixes text where every character is repeated twice due to hooker issues.
 Example: "HHeelllloo" -> "Hello"
 """
 
-from plugins import TextractorPlugin
+from plugins import HookPlugin
 
 
 def runtime_debug_logging_enabled() -> bool:
@@ -20,7 +20,7 @@ import logging
 import os
 import sys
 
-class RepeatedCharFixer(TextractorPlugin):
+class RepeatedCharFixer(HookPlugin):
     def _log_debug(self, stage: str, **fields):
         if not runtime_debug_logging_enabled():
             return

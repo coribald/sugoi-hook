@@ -6,7 +6,7 @@ Concatenates output from multiple selected hooks into a single output.
 Supports a required dialogue hook plus optional prefix hooks such as speaker names.
 """
 
-from plugins import TextractorPlugin
+from plugins import HookPlugin
 
 
 def runtime_debug_logging_enabled() -> bool:
@@ -24,7 +24,7 @@ import time
 from collections import deque
 
 
-class HookConcatenationPlugin(TextractorPlugin):
+class HookConcatenationPlugin(HookPlugin):
     def _log_debug(self, stage: str, **fields):
         if not runtime_debug_logging_enabled():
             return

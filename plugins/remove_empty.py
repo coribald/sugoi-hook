@@ -5,7 +5,7 @@ Remove Empty Lines Plugin
 Filters out empty or whitespace-only text.
 """
 
-from plugins import TextractorPlugin
+from plugins import HookPlugin
 
 
 def runtime_debug_logging_enabled() -> bool:
@@ -20,7 +20,7 @@ import os
 import sys
 
 
-class RemoveEmptyPlugin(TextractorPlugin):
+class RemoveEmptyPlugin(HookPlugin):
     def _log_debug(self, stage: str, **fields):
         if not runtime_debug_logging_enabled():
             return

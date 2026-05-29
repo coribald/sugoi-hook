@@ -30,10 +30,9 @@ echo.
 
 python -m nuitka ^
     --mode=standalone ^
-    --include-raw-dir=textractor_builds=textractor_builds ^
     --include-raw-dir=luna_builds=luna_builds ^
+    --include-raw-dir=deep_translator=deep_translator ^
     --include-raw-dir=plugins=plugins ^
-    --include-raw-dir=Translator=Translator ^
     --include-data-files=logo.webp=logo.webp ^
     --enable-plugin=tk-inter ^
     --include-module=tkinter.font ^
@@ -47,7 +46,6 @@ python -m nuitka ^
     --include-package=win32con ^
     --include-package=win32api ^
     --include-package=win32process ^
-    --include-package=websocket_server ^
     --follow-imports ^
     --assume-yes-for-downloads ^
     --windows-console-mode=attach ^

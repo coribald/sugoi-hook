@@ -1,25 +1,25 @@
 """
-Textractor GUI Plugin System
-============================
+SugoiHook Plugin System
+=======================
 
-This module provides the plugin infrastructure for Textractor GUI.
+This module provides the plugin infrastructure for SugoiHook.
 Plugins can filter, transform, or process extracted text.
 
 To create a plugin:
 1. Create a new .py file in this plugins folder
-2. Inherit from TextractorPlugin base class
+2. Inherit from HookPlugin base class
 3. Implement the required methods
 
 Example:
 --------
-from plugins import TextractorPlugin
+from plugins import HookPlugin
 
-class MyPlugin(TextractorPlugin):
+class MyPlugin(HookPlugin):
     name = "My Custom Plugin"
     description = "Does something cool with text"
     version = "1.0"
     author = "Your Name"
-    
+
     def process_text(self, text: str) -> str | None:
         # Return modified text, or None to filter it out
         return text.upper()
@@ -29,9 +29,9 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 
-class TextractorPlugin(ABC):
+class HookPlugin(ABC):
     """
-    Base class for all Textractor GUI plugins.
+    Base class for all SugoiHook plugins.
     
     Plugins can:
     - Filter out unwanted text (return None from process_text)

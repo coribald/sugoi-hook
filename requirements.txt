@@ -4,4 +4,3 @@ pywin32
 pystray
 requests
 beautifulsoup4
-websocket-server

@@ -13,6 +13,9 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
   - text-processing plugins
   - translation plugins
   - overlay display plugin
+  - all built-in plugins now inherit from `HookPlugin`
+- `deep_translator/`
+  - vendored translation backend package used by the `Deep Translator` plugin
 - `plugins_config.json`
   - active plugins
   - plugin settings
@@ -21,7 +24,7 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
   - overlay window geometry and styling
 - `game_profiles.json`
   - saved per-game hook profiles
-  - remembers engine choice and a saved hook/manual hook for auto-selection
+  - remembers a saved hook/manual hook for auto-selection
   - does not currently store full per-game plugin/app configuration
 
 ## Current Architecture Notes
@@ -49,8 +52,11 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
 
 ## Translation / Hook Pipeline State
 
-- OpenAI and Google translation plugins are Python 3.9-safe again.
+- Source runs now assume a system-installed Python 3.11+ environment.
 - Clipboard now gets the same untranslated line that is sent to translation plugins.
+- `deep_translator.py` is now the configurable multi-provider translation plugin.
+- Its settings UI is provider-reactive:
+  - changing provider in the dialog rebuilds the visible provider-specific fields immediately
 - Hook Concatenation currently supports:
   - `dialogue_hook_id`
   - `prefix_hook_ids`
@@ -131,6 +137,7 @@ If behavior looks wrong, inspect:
   - avoid rebuilding unless validating packaged behavior
 - If packaged behavior is revisited:
   - remember earlier fixes around Tk packaging, logging, and elevation heuristics
+  - current packaged builds are Luna-only
 
 ## Today’s High-Level Changelog
 
