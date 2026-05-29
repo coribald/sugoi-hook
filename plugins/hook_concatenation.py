@@ -10,11 +10,11 @@ from plugins import TextractorPlugin
 
 
 def runtime_debug_logging_enabled() -> bool:
-    import os
-    import sys
     env_enabled = os.environ.get('SUGOIHOOK_DEBUG_LOGGING', '').strip().lower() in {'1', 'true', 'yes', 'on'}
     argv_enabled = any(str(arg).strip().lower() == '--debug' for arg in sys.argv[1:])
     return env_enabled or argv_enabled
+
+
 from typing import Optional
 import logging
 import os
@@ -65,7 +65,6 @@ class HookConcatenationPlugin(TextractorPlugin):
         self._state['burst_line_threshold'] = 4
         self._state['burst_settle_ms'] = 200
         self._state['hook_buffers'] = {}
-        self._state['clipboard_hook_buffers'] = {}
         self._state['pending_dialogue'] = None
         self._state['pending_timer_id'] = None
         self._state['pending_clipboard_emit'] = None
@@ -216,14 +215,21 @@ class HookConcatenationPlugin(TextractorPlugin):
         return None
 
     def _get_concat_config(self):
-        dialogue_hook_id = str(self._state.get('dialogue_hook_id', '')).strip()
-        prefix_hook_ids = [hook_id.strip() for hook_id in str(self._state.get('prefix_hook_ids', '')).split(',') if hook_id.strip().isdigit()]
+        dialogue_hook_selector = str(self._state.get('dialogue_hook_id', '')).strip()
+        prefix_hook_selectors = self._parse_selector_list(self._state.get('prefix_hook_ids', ''))
 
-        if not dialogue_hook_id:
-            legacy_hook_ids = self._parse_hook_ids()
-            if legacy_hook_ids:
-                dialogue_hook_id = legacy_hook_ids[-1]
-                prefix_hook_ids = legacy_hook_ids[:-1]
+        if not dialogue_hook_selector:
+            legacy_hook_selectors = self._parse_selector_list(self._state.get('hook_ids', ''))
+            if legacy_hook_selectors:
+                dialogue_hook_selector = legacy_hook_selectors[-1]
+                prefix_hook_selectors = legacy_hook_selectors[:-1]
+
+        dialogue_hook_id = self._resolve_hook_selector(dialogue_hook_selector)
+        prefix_hook_ids = []
+        for selector in prefix_hook_selectors:
+            resolved_hook_id = self._resolve_hook_selector(selector)
+            if resolved_hook_id and resolved_hook_id not in prefix_hook_ids:
+                prefix_hook_ids.append(resolved_hook_id)
 
         all_hook_ids = []
         for hook_id in prefix_hook_ids + ([dialogue_hook_id] if dialogue_hook_id else []):
@@ -232,36 +238,46 @@ class HookConcatenationPlugin(TextractorPlugin):
 
         return {
             'dialogue_hook_id': dialogue_hook_id,
+            'dialogue_hook_selector': dialogue_hook_selector,
             'prefix_hook_ids': prefix_hook_ids,
+            'prefix_hook_selectors': prefix_hook_selectors,
             'all_hook_ids': all_hook_ids,
             'speaker_wait_ms': self._state.get('speaker_wait_ms', 150),
         }
 
-    def _parse_hook_ids(self) -> list:
-        hook_ids_str = self._state['hook_ids'].strip()
+    def _parse_selector_list(self, selectors_value) -> list:
+        hook_ids_str = str(selectors_value).strip()
         if not hook_ids_str:
             return []
-        hook_ids = []
-        for hook_id in hook_ids_str.split(','):
-            hook_id = hook_id.strip()
-            if hook_id.isdigit():
-                hook_ids.append(hook_id)
-        return hook_ids
+        selectors = []
+        for selector in hook_ids_str.split(','):
+            selector = selector.strip()
+            if selector:
+                selectors.append(selector)
+        return selectors
+
+    def _resolve_hook_selector(self, selector: str) -> str:
+        normalized_selector = str(selector or '').strip()
+        if not normalized_selector:
+            return ''
+        if normalized_selector.isdigit():
+            return normalized_selector
+
+        app = getattr(self, 'app', None)
+        hooks = getattr(app, 'hooks', {}) if app else {}
+        for hook_id, hook_info in hooks.items():
+            context_info = str(hook_info.get('context_info', '')).strip()
+            function_name = str(hook_info.get('function', '')).strip()
+            if context_info and context_info == normalized_selector:
+                return str(hook_id)
+            if function_name and function_name == normalized_selector:
+                return str(hook_id)
+        return ''
 
     def _all_prefixes_ready(self, config) -> bool:
         if not config['prefix_hook_ids']:
             return True
         return all(prefix_hook_id in self._state['hook_buffers'] for prefix_hook_id in config['prefix_hook_ids'])
-
-    def _normalize_combined_output_order(self, text: str) -> str:
-        stripped = text.strip()
-        # Defensive fix: if we somehow get quoted dialogue followed by a short speaker label,
-        # move the label back in front where VN hook concatenation expects it.
-        trailing_label_match = re.match(r'^(「.+?」)([^「」\s]{1,24})$', stripped)
-        if trailing_label_match:
-            dialogue_text, trailing_label = trailing_label_match.groups()
-            return f"{trailing_label}{dialogue_text}"
-        return stripped
 
     def _build_clipboard_output(self, config, hook_text: str) -> str:
         mode = str(self._state.get('clipboard_output_mode', 'combined')).strip().lower()
@@ -278,7 +294,7 @@ class HookConcatenationPlugin(TextractorPlugin):
             if prefix_text:
                 output_parts.append(prefix_text)
         output_parts.append(dialogue_text)
-        return self._normalize_combined_output_order(''.join(output_parts))
+        return ''.join(output_parts)
 
     def _build_pending_clipboard_output(self) -> Optional[str]:
         config = self._get_concat_config()
@@ -324,7 +340,7 @@ class HookConcatenationPlugin(TextractorPlugin):
             output_parts.append(dialogue_text)
         if not output_parts:
             return ""
-        return self._normalize_combined_output_order(''.join(output_parts)) + '\n'
+        return ''.join(output_parts) + '\n'
 
     def _emit_pending_dialogue_now(self) -> Optional[str]:
         self._cancel_pending_timer()
@@ -517,7 +533,6 @@ class HookConcatenationPlugin(TextractorPlugin):
 
     def _discard_pending_concat_state(self):
         self._state['hook_buffers'] = {}
-        self._state['clipboard_hook_buffers'] = {}
         self._state['pending_dialogue'] = None
         self._state['pending_clipboard_emit'] = None
 
@@ -566,17 +581,17 @@ class HookConcatenationPlugin(TextractorPlugin):
             'hook_ids': (
                 self._state['hook_ids'],
                 'str',
-                'Legacy hook order (fallback only). If dialogue/prefix hooks are set, those take priority.'
+                'Legacy hook order/selectors (fallback only). For Luna you can use numeric IDs, function labels, or full context_info selectors.'
             ),
             'dialogue_hook_id': (
                 self._state['dialogue_hook_id'],
                 'str',
-                'Required dialogue hook ID (for example 2)'
+                'Required dialogue hook selector. Supports a numeric ID like 2, a Luna function label like EXBWX0@25C880, or full Luna context_info.'
             ),
             'prefix_hook_ids': (
                 self._state['prefix_hook_ids'],
                 'str',
-                'Optional prefix hook IDs in order (for example 1 or 5,1)'
+                'Optional prefix hook selectors in order. Supports numeric IDs like 1, Luna function labels, or full Luna context_info selectors.'
             ),
             'speaker_wait_ms': (
                 self._state['speaker_wait_ms'],
@@ -645,13 +660,7 @@ class HookConcatenationPlugin(TextractorPlugin):
 
         elif name in ('hook_ids', 'dialogue_hook_id', 'prefix_hook_ids'):
             try:
-                hook_ids_str = str(value).strip()
-                if hook_ids_str:
-                    parts = [p.strip() for p in hook_ids_str.split(',')]
-                    for part in parts:
-                        if part and not part.isdigit():
-                            return False
-                self._state[name] = hook_ids_str
+                self._state[name] = str(value).strip()
                 self.reset()
                 return True
             except (ValueError, TypeError):

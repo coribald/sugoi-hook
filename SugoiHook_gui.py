@@ -271,6 +271,18 @@ class ModernTextractorGUI:
         self.compact_window_geometry = None
         self.window_geometry_after_id = None
         self.pipeline_debug_enabled = runtime_debug_logging_enabled()
+        self.output_processing_lock = threading.Lock()
+        self.output_worker_condition = threading.Condition()
+        self.output_pending_request = None
+        self.output_request_generation = 0
+        self.output_latest_generation = 0
+        self.output_worker_shutdown = False
+        self.output_worker_thread = threading.Thread(
+            target=self.output_processing_worker,
+            name="output-processing-worker",
+            daemon=True,
+        )
+        self.output_worker_thread.start()
         
         # System tray
         self.tray_icon = None
@@ -652,6 +664,13 @@ class ModernTextractorGUI:
 
         return None
 
+    def get_plugin_filename_by_name(self, plugin_name):
+        """Return the filename for a plugin by its display name."""
+        for filename, plugin in self.plugins.items():
+            if plugin.name == plugin_name:
+                return filename
+        return None
+
     def get_hook_concatenation_state(self):
         """Return whether hook concatenation mode is active and which hooks it is using."""
         for plugin_filename, plugin in self.plugins.items():
@@ -662,12 +681,18 @@ class ModernTextractorGUI:
                     break
                 plugin_state = getattr(plugin, '_state', {})
                 enabled_mode = bool(plugin_state.get('enabled_mode', False))
-                dialogue_hook_id = str(plugin_state.get('dialogue_hook_id', '')).strip()
-                prefix_hook_ids = [hook_id.strip() for hook_id in str(plugin_state.get('prefix_hook_ids', '')).split(',') if hook_id.strip().isdigit()]
-                hook_ids = prefix_hook_ids + ([dialogue_hook_id] if dialogue_hook_id else [])
-                if not hook_ids:
-                    raw_hook_ids = str(plugin_state.get('hook_ids', '')).strip()
-                    hook_ids = [hook_id.strip() for hook_id in raw_hook_ids.split(',') if hook_id.strip().isdigit()]
+                if hasattr(plugin, '_get_concat_config'):
+                    concat_config = plugin._get_concat_config()
+                    dialogue_hook_id = str(concat_config.get('dialogue_hook_id', '')).strip()
+                    prefix_hook_ids = [str(hook_id).strip() for hook_id in concat_config.get('prefix_hook_ids', []) if str(hook_id).strip()]
+                    hook_ids = [hook_id for hook_id in prefix_hook_ids + ([dialogue_hook_id] if dialogue_hook_id else []) if hook_id]
+                else:
+                    dialogue_hook_id = str(plugin_state.get('dialogue_hook_id', '')).strip()
+                    prefix_hook_ids = [hook_id.strip() for hook_id in str(plugin_state.get('prefix_hook_ids', '')).split(',') if hook_id.strip().isdigit()]
+                    hook_ids = prefix_hook_ids + ([dialogue_hook_id] if dialogue_hook_id else [])
+                    if not hook_ids:
+                        raw_hook_ids = str(plugin_state.get('hook_ids', '')).strip()
+                        hook_ids = [hook_id.strip() for hook_id in raw_hook_ids.split(',') if hook_id.strip().isdigit()]
                 buffered_hooks = list(plugin_state.get('hook_buffers', {}).keys())
                 return {
                     'active': enabled_mode and bool(hook_ids),
@@ -677,7 +702,9 @@ class ModernTextractorGUI:
                     'prefix_hook_ids': prefix_hook_ids,
                     'speaker_wait_ms': int(plugin_state.get('speaker_wait_ms', 150)),
                 }
-            except Exception:
+            except Exception as exc:
+                if runtime_debug_logging_enabled():
+                    logging.exception("Failed to read Hook Concatenation state: %s", exc)
                 break
 
         return {
@@ -1059,13 +1086,88 @@ class ModernTextractorGUI:
         """Process text through active plugins for clipboard-safe output."""
         _processed_text, clipboard_text = self.process_plugin_output_bundle(text)
         return clipboard_text
+
+    def submit_output_processing(self, text, allow_auto_copy=False):
+        """Queue output processing and keep only the newest pending line."""
+        with self.output_worker_condition:
+            self.output_request_generation += 1
+            generation = self.output_request_generation
+            self.output_latest_generation = generation
+            self.output_pending_request = {
+                'generation': generation,
+                'text': text,
+                'allow_auto_copy': allow_auto_copy,
+            }
+            self.output_worker_condition.notify()
+        self.log_pipeline('append_output.queued', incoming=text, allow_auto_copy=allow_auto_copy, generation=generation)
+
+    def invalidate_output_processing(self, clear_pending=False):
+        """Mark any in-flight output work stale so late results are ignored."""
+        with self.output_worker_condition:
+            self.output_request_generation += 1
+            self.output_latest_generation = self.output_request_generation
+            if clear_pending:
+                self.output_pending_request = None
+
+    def output_processing_worker(self):
+        """Process plugin output off the UI thread while dropping stale work."""
+        while True:
+            with self.output_worker_condition:
+                while not self.output_worker_shutdown and self.output_pending_request is None:
+                    self.output_worker_condition.wait()
+
+                if self.output_worker_shutdown:
+                    return
+
+                request = self.output_pending_request
+                self.output_pending_request = None
+
+            generation = request['generation']
+            text = request['text']
+            allow_auto_copy = request['allow_auto_copy']
+
+            with self.output_processing_lock:
+                processed_text, clipboard_text = self.process_plugin_output_bundle(text)
+
+            with self.output_worker_condition:
+                is_stale = generation != self.output_latest_generation
+
+            if is_stale:
+                self.log_pipeline('append_output.stale_discarded', incoming=text, allow_auto_copy=allow_auto_copy, generation=generation)
+                continue
+
+            self.run_on_ui_thread(self._append_output_ui, processed_text, clipboard_text, allow_auto_copy)
+
+    def _append_output_ui(self, processed_text_value, clipboard_text_value, allow_auto_copy):
+        self.log_pipeline('append_output.ui', processed_text=processed_text_value, clipboard_text=clipboard_text_value, allow_auto_copy=allow_auto_copy)
+        if processed_text_value is not None:
+            self.output_text.config(state='normal')
+            self.output_text.insert(tk.END, processed_text_value)
+            self.output_text.see(tk.END)
+            self.output_text.config(state='disabled')
+            self.update_statistics(processed_text_value)
+
+        fallback_auto_copy = (
+            not allow_auto_copy
+            and self.auto_copy_enabled.get()
+            and clipboard_text_value is not None
+        )
+
+        if self.auto_copy_enabled.get() and (allow_auto_copy or fallback_auto_copy) and clipboard_text_value is not None:
+            self.log_pipeline('append_output.auto_copy', clipboard_text=clipboard_text_value, allow_auto_copy=allow_auto_copy, fallback_auto_copy=fallback_auto_copy)
+            self.auto_copy_text(clipboard_text_value)
+        else:
+            self.log_pipeline('append_output.no_auto_copy', clipboard_text=clipboard_text_value, allow_auto_copy=allow_auto_copy, fallback_auto_copy=fallback_auto_copy, auto_copy_enabled=self.auto_copy_enabled.get())
+
     def reset_all_plugins(self):
         """Reset state of all plugins"""
-        for plugin in self.plugins.values():
-            try:
-                plugin.reset()
-            except Exception:
-                pass
+        self.invalidate_output_processing(clear_pending=True)
+        with self.output_processing_lock:
+            for plugin in self.plugins.values():
+                try:
+                    plugin.reset()
+                except Exception:
+                    pass
     
     def open_plugins_folder(self):
         """Open the plugins folder in file explorer"""
@@ -2952,6 +3054,7 @@ class ModernTextractorGUI:
         
         # Enable double-click to select hook
         self.hook_tree.bind('<Double-Button-1>', lambda e: self.select_hook())
+        self.hook_tree.bind('<Button-3>', self.show_hook_context_menu)
         self.bind_vertical_mousewheel(self.hook_tree)
         
         # Manual hook input section
@@ -3743,9 +3846,12 @@ For more information, refer to the Textractor documentation.
                         self.hooks[hook_id] = {
                             'id': hook_id,
                             'function': thread_name,
+                            'context_info': context_info,
                             'texts': []
                         }
                         self.root.after(0, self.add_hook_to_list, hook_id, thread_name)
+                    else:
+                        self.hooks[hook_id]['context_info'] = context_info
                     
                     # Store text and update preview - even if text is empty string
                     # Only store up to 3 texts for memory efficiency
@@ -3923,6 +4029,166 @@ For more information, refer to the Textractor documentation.
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to select hook:\n{str(e)}")
+
+    def show_hook_context_menu(self, event):
+        """Show a context menu for hook list actions."""
+        try:
+            item = self.hook_tree.identify_row(event.y)
+            if not item:
+                return
+
+            self.hook_tree.selection_set(item)
+            item_values = self.hook_tree.item(item).get('values', ())
+            if not item_values:
+                return
+
+            hook_id = str(item_values[0])
+            hook_info = self.hooks.get(hook_id, {})
+            context_info = str(hook_info.get('context_info', '')).strip()
+            function_name = str(hook_info.get('function', item_values[1] if len(item_values) > 1 else '')).strip()
+            concat_selector = self.get_hook_concat_selector_value(hook_id)
+            concat_plugin_filename = self.get_plugin_filename_by_name('Hook Concatenation')
+
+            menu = tk.Menu(self.root, tearoff=0, bg=self.colors['surface'], fg=self.colors['fg'])
+            menu.add_command(label="Use Selected Hook", command=self.select_hook)
+            menu.add_command(
+                label="Copy Hook ID",
+                command=lambda hook_id=hook_id: self.copy_hook_context_info(hook_id, "hook ID")
+            )
+            if context_info:
+                menu.add_command(
+                    label="Copy Luna Context Info",
+                    command=lambda context_info=context_info: self.copy_hook_context_info(context_info, "Luna context info")
+                )
+            if function_name:
+                menu.add_command(
+                    label="Copy Hook Function Label",
+                    command=lambda function_name=function_name: self.copy_hook_context_info(function_name, "hook function label")
+                )
+
+            if concat_plugin_filename and concat_selector:
+                menu.add_separator()
+                menu.add_command(
+                    label="Set as Dialogue Hook",
+                    command=lambda hook_id=hook_id: self.set_hook_concat_role(hook_id, 'dialogue')
+                )
+                menu.add_command(
+                    label="Set as Prefix Hook",
+                    command=lambda hook_id=hook_id: self.set_hook_concat_role(hook_id, 'prefix')
+                )
+
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+
+    def copy_hook_context_info(self, value: str, label: str = "hook value"):
+        """Copy hook-related metadata to the clipboard."""
+        try:
+            if not str(value).strip():
+                self.notify_user(f"No {label} available for this hook.", level='warning')
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(value)
+            self.root.update()
+            self.notify_user(f"Copied {label} to clipboard.", level='success')
+        except Exception as exc:
+            messagebox.showerror("Error", f"Failed to copy {label}:\n{str(exc)}")
+
+    def get_hook_concat_selector_value(self, hook_id: str) -> str:
+        """Return the preferred selector value for hook concatenation."""
+        hook_info = self.hooks.get(str(hook_id), {})
+        function_name = str(hook_info.get('function', '')).strip()
+        context_info = str(hook_info.get('context_info', '')).strip()
+        return function_name or context_info or str(hook_id).strip()
+
+    def resolve_hook_concat_selector(self, selector: str) -> str:
+        """Resolve a concat selector to the current session hook ID when possible."""
+        normalized_selector = str(selector or '').strip()
+        if not normalized_selector:
+            return ''
+        if normalized_selector.isdigit():
+            return normalized_selector
+
+        for hook_id, hook_info in self.hooks.items():
+            context_info = str(hook_info.get('context_info', '')).strip()
+            function_name = str(hook_info.get('function', '')).strip()
+            if normalized_selector in {context_info, function_name}:
+                return str(hook_id)
+        return ''
+
+    def filter_hook_concat_selectors(self, selectors, excluded_hook_id: str) -> list[str]:
+        """Remove selectors that point at the excluded hook ID and dedupe the remainder."""
+        excluded_hook_id = str(excluded_hook_id).strip()
+        filtered = []
+        seen = set()
+        for selector in selectors:
+            normalized_selector = str(selector).strip()
+            if not normalized_selector:
+                continue
+            resolved_hook_id = self.resolve_hook_concat_selector(normalized_selector)
+            if excluded_hook_id and resolved_hook_id == excluded_hook_id:
+                continue
+            dedupe_key = resolved_hook_id or normalized_selector
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            filtered.append(normalized_selector)
+        return filtered
+
+    def set_hook_concat_role(self, hook_id: str, role: str):
+        """Assign a hook directly to the hook concatenation plugin."""
+        plugin_filename = self.get_plugin_filename_by_name('Hook Concatenation')
+        if not plugin_filename or plugin_filename not in self.plugins:
+            self.notify_user("Hook Concatenation plugin is not available.", level='warning')
+            return
+
+        selector_value = self.get_hook_concat_selector_value(hook_id)
+        if not selector_value:
+            self.notify_user("No usable selector found for this hook.", level='warning')
+            return
+
+        plugin = self.plugins[plugin_filename]
+        if plugin_filename not in self.active_plugins:
+            self.activate_plugin(plugin_filename)
+
+        current_dialogue = str(plugin._state.get('dialogue_hook_id', '')).strip()
+        current_prefixes = [part.strip() for part in str(plugin._state.get('prefix_hook_ids', '')).split(',') if part.strip()]
+
+        if role == 'dialogue':
+            updated_prefixes = self.filter_hook_concat_selectors(current_prefixes, hook_id)
+            if not plugin.set_setting('dialogue_hook_id', selector_value):
+                self.notify_user("Failed to set dialogue hook.", level='warning')
+                return
+            if not plugin.set_setting('prefix_hook_ids', ','.join(updated_prefixes)):
+                self.notify_user("Failed to update prefix hooks.", level='warning')
+                return
+            role_label = 'dialogue hook'
+        elif role == 'prefix':
+            if self.resolve_hook_concat_selector(current_dialogue) == str(hook_id):
+                self.notify_user("That hook is already assigned as the dialogue hook.", level='warning')
+                return
+            if not plugin.set_setting('prefix_hook_ids', selector_value):
+                self.notify_user("Failed to set prefix hook.", level='warning')
+                return
+            role_label = 'prefix hook'
+        else:
+            return
+
+        if not plugin.set_setting('enabled_mode', True):
+            self.notify_user("Failed to enable hook concatenation mode.", level='warning')
+            return
+
+        if plugin_filename not in self.plugin_settings:
+            self.plugin_settings[plugin_filename] = {}
+        self.plugin_settings[plugin_filename]['dialogue_hook_id'] = str(plugin._state.get('dialogue_hook_id', '')).strip()
+        self.plugin_settings[plugin_filename]['prefix_hook_ids'] = str(plugin._state.get('prefix_hook_ids', '')).strip()
+        self.plugin_settings[plugin_filename]['enabled_mode'] = bool(plugin._state.get('enabled_mode', False))
+        self.save_plugins_config()
+        self.update_hook_status_panel(f"set concat {role_label}")
+        self.notify_user(f"Set {selector_value} as {role_label}.", level='success')
     
     def update_event_text_layout(self):
         """Resize the session events area to its content up to a small cap."""
@@ -3965,34 +4231,12 @@ For more information, refer to the Textractor documentation.
         """Append text to the output area with plugin filtering"""
         if process_plugins:
             self.log_pipeline('append_output.received', incoming=text, allow_auto_copy=allow_auto_copy)
-            # Process text through active plugins once for both display and clipboard outputs
-            processed_text, clipboard_text = self.process_plugin_output_bundle(text)
+            self.submit_output_processing(text, allow_auto_copy)
+            return
         else:
             processed_text = text
             clipboard_text = text
-
-        def do_append(processed_text_value, clipboard_text_value):
-            self.log_pipeline('append_output.ui', processed_text=processed_text_value, clipboard_text=clipboard_text_value, allow_auto_copy=allow_auto_copy)
-            if processed_text_value is not None:
-                self.output_text.config(state='normal')
-                self.output_text.insert(tk.END, processed_text_value)
-                self.output_text.see(tk.END)
-                self.output_text.config(state='disabled')
-                self.update_statistics(processed_text_value)
-
-            fallback_auto_copy = (
-                not allow_auto_copy
-                and self.auto_copy_enabled.get()
-                and clipboard_text_value is not None
-            )
-
-            if self.auto_copy_enabled.get() and (allow_auto_copy or fallback_auto_copy) and clipboard_text_value is not None:
-                self.log_pipeline('append_output.auto_copy', clipboard_text=clipboard_text_value, allow_auto_copy=allow_auto_copy, fallback_auto_copy=fallback_auto_copy)
-                self.auto_copy_text(clipboard_text_value)
-            else:
-                self.log_pipeline('append_output.no_auto_copy', clipboard_text=clipboard_text_value, allow_auto_copy=allow_auto_copy, fallback_auto_copy=fallback_auto_copy, auto_copy_enabled=self.auto_copy_enabled.get())
-
-        self.run_on_ui_thread(do_append, processed_text, clipboard_text)
+        self.run_on_ui_thread(self._append_output_ui, processed_text, clipboard_text, allow_auto_copy)
     
     def auto_copy_text(self, text):
         """Automatically copy new text to clipboard"""
@@ -4366,6 +4610,10 @@ For more information, refer to the Textractor documentation.
         """Handle window closing"""
         # Save configuration on close
         self.save_plugins_config()
+        with self.output_worker_condition:
+            self.output_worker_shutdown = True
+            self.output_pending_request = None
+            self.output_worker_condition.notify_all()
 
         self.shutdown_plugin_instances()
         

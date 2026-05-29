@@ -113,30 +113,8 @@ class OpenAITranslatePlugin(TextractorPlugin):
             return text
 
         stripped_text = text.strip()
-
-        if stripped_text.startswith('[Hook ') or stripped_text.startswith('[Hook #'):
+        if self.is_system_or_ui_text(stripped_text):
             return text
-
-        system_keywords = (
-            'Selected Hook', 'Attached to', 'Detached', 'Waiting for',
-            'Function:', 'Manual hook', 'Process Name', 'PID:',
-            'Interact with', 'Hook at', 'Console'
-        )
-
-        if any(keyword in stripped_text for keyword in system_keywords):
-            return text
-
-        if stripped_text.startswith('[Console]'):
-            return text
-
-        if stripped_text and stripped_text[0] in '✓●○🎮🎯🔌📝⏳🔗⏹️🗑️💾🔄📂🔽':
-            return text
-
-        if len(stripped_text) > 3:
-            separator_chars = '─═━-_'
-            separator_count = sum(1 for c in stripped_text if c in separator_chars)
-            if separator_count / len(stripped_text) > 0.8:
-                return text
 
         translated = self.translate_text(stripped_text)
         self.remember_original_line(stripped_text)
@@ -253,8 +231,9 @@ class OpenAITranslatePlugin(TextractorPlugin):
         if not self.debug_logging or not runtime_debug_logging_enabled():
             return
 
+        payload_for_logging = self._truncate_instructions_for_logging(payload)
         self.log_debug("Outbound payload:")
-        print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
+        print(json.dumps(payload_for_logging, ensure_ascii=False, indent=2), flush=True)
 
     def log_response(self, data: dict):
         if not self.debug_logging or not runtime_debug_logging_enabled():
@@ -295,9 +274,11 @@ class OpenAITranslatePlugin(TextractorPlugin):
     def should_translate_text(self, stripped_text: str) -> bool:
         if not stripped_text:
             return False
+        return not self.is_system_or_ui_text(stripped_text)
 
+    def is_system_or_ui_text(self, stripped_text: str) -> bool:
         if stripped_text.startswith('[Hook ') or stripped_text.startswith('[Hook #'):
-            return False
+            return True
 
         system_keywords = (
             'Selected Hook', 'Attached to', 'Detached', 'Waiting for',
@@ -306,21 +287,21 @@ class OpenAITranslatePlugin(TextractorPlugin):
         )
 
         if any(keyword in stripped_text for keyword in system_keywords):
-            return False
+            return True
 
         if stripped_text.startswith('[Console]'):
-            return False
+            return True
 
-        if stripped_text and stripped_text[0] in 'âœ“â—â—‹ðŸŽ®ðŸŽ¯ðŸ”ŒðŸ“â³ðŸ”—â¹ï¸ðŸ—‘ï¸ðŸ’¾ðŸ”„ðŸ“‚ðŸ”½':
-            return False
+        if stripped_text and stripped_text[0] in '✓●○🎮🎯🔌📝⏳🔗⏹️🗑️💾🔄📂🔽':
+            return True
 
         if len(stripped_text) > 3:
-            separator_chars = 'â”€â•â”-_'
+            separator_chars = '─═━-_'
             separator_count = sum(1 for c in stripped_text if c in separator_chars)
             if separator_count / len(stripped_text) > 0.8:
-                return False
+                return True
 
-        return True
+        return False
 
     def remember_original_line(self, text: str):
         stripped = text.strip()
