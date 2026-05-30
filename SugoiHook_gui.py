@@ -1488,12 +1488,16 @@ class SugoiHookGUI:
         dialog.configure(bg=self.colors['bg'])
         dialog.transient(self.root)
         dialog.grab_set()
+        dialog.rowconfigure(0, weight=1)
+        dialog.columnconfigure(0, weight=1)
 
         container = ttk.Frame(dialog, style="TFrame")
-        container.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+        container.grid(row=0, column=0, sticky="nsew", padx=15, pady=15)
+        container.rowconfigure(1, weight=1)
+        container.columnconfigure(0, weight=1)
 
         title_card = ttk.Frame(container, style="Card.TFrame", padding=15)
-        title_card.pack(fill=tk.X, pady=(0, 10))
+        title_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         ttk.Label(
             title_card,
             text=f"⚙️ {plugin_name} Settings",
@@ -1502,7 +1506,9 @@ class SugoiHookGUI:
         ).pack()
 
         settings_card = ttk.Frame(container, style="Card.TFrame", padding=15)
-        settings_card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        settings_card.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+        settings_card.rowconfigure(0, weight=1)
+        settings_card.columnconfigure(0, weight=1)
 
         canvas = tk.Canvas(settings_card, bg=self.colors['surface'], highlightthickness=0)
         scrollbar = ttk.Scrollbar(settings_card, orient="vertical", command=canvas.yview)
@@ -1520,8 +1526,8 @@ class SugoiHookGUI:
             canvas.itemconfig(canvas_window, width=event.width)
         canvas.bind('<Configure>', configure_canvas_width)
 
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
 
         def widget_is_descendant(child, ancestor):
             current = child
@@ -1795,7 +1801,7 @@ class SugoiHookGUI:
 
         if plugin_filename == 'overlay_window.py':
             preview_card = ttk.Frame(container, style="Card.TFrame", padding=15)
-            preview_card.pack(fill=tk.X, pady=(0, 10))
+            preview_card.grid(row=2, column=0, sticky="ew", pady=(0, 10))
             ttk.Label(
                 preview_card,
                 text="Live Preview",
@@ -1827,7 +1833,7 @@ class SugoiHookGUI:
             refresh_overlay_preview()
 
         btn_card = ttk.Frame(container, style="Card.TFrame", padding=15)
-        btn_card.pack(fill=tk.X)
+        btn_card.grid(row=3, column=0, sticky="ew")
 
         def save_settings():
             if plugin_filename not in self.plugin_settings:
