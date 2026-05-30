@@ -252,7 +252,7 @@ class OverlayWindowPlugin(HookPlugin):
                             fg=self.config['close_btn_color'],
                             font=("Arial", 14, "bold"), cursor="hand2")
         close_btn.place(relx=1.0, x=-10, y=0, anchor="ne")
-        close_btn.bind("<Button-1>", lambda e: self.overlay.withdraw())
+        close_btn.bind("<Button-1>", self.hide_overlay)
 
         content_frame = tk.Frame(self.overlay, bg=bg_color)
         content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -367,6 +367,19 @@ class OverlayWindowPlugin(HookPlugin):
     def start_move(self, event):
         self.drag_data["x"] = event.x
         self.drag_data["y"] = event.y
+
+    def hide_overlay(self, event=None):
+        if not self.overlay:
+            return
+        try:
+            self.capture_overlay_geometry()
+            self.flush_save_config()
+        except Exception:
+            pass
+        try:
+            self.overlay.withdraw()
+        except Exception:
+            pass
 
     def do_move(self, event):
         deltax = event.x - self.drag_data["x"]
