@@ -12,6 +12,7 @@ A fork of SugoiHook - a Windows GUI for attaching to game processes, selecting t
 - Renamed the plugin base layer from `TextractorPlugin` to `HookPlugin` and cleaned up Luna-only app naming.
 - Reworked the old Google plugin into a configurable `Deep Translator` plugin with reactive provider-specific settings.
 - Moved the vendored translation package to top-level `deep_translator/` and removed the old `Translator/` wrapper folder.
+- Added a native Jitendex-backed dictionary pane to the overlay window, including click/double-click lookup and common Japanese deinflection support.
 - Updated the build scripts to match the current repo layout and preserve runtime `*_config.json` files across clean builds.
 - Reworked the main UI layout: fixed header, better section collapsing, compact/full geometry restore, clearer hook/process flow, and split `Session Events` / `Session Output`.
 - Improved plugin management with explicit controls, better defaults, and a live preview in the Overlay Window settings.
@@ -79,6 +80,8 @@ Sugoi Hook is currently packaged as a Luna-only build:
   - forwards extracted text to Translator++
 - **Overlay Window**
   - on-screen text overlay with configurable fonts, colors, opacity, and saved position/size
+  - optional right-side native dictionary pane backed by Jitendex
+  - click or double-click overlay text to look up nearby Japanese terms
 
 ## Quick Start
 
@@ -116,7 +119,12 @@ build_debug_standalone.bat
 Current build behavior:
 
 - uses repo-local pip and Nuitka caches
-- includes the runtime asset folders used by the app
+- includes the runtime asset folders used by the app:
+  - `luna_builds/`
+  - `deep_translator/`
+  - `plugins/`
+  - `dictionaries/`
+- explicitly bundles `dictionary_backend.py` for the overlay dictionary system
 - preserves runtime `*_config.json` files across clean builds
 - release onefile output includes:
   - `SugoiHook.exe`
@@ -206,7 +214,26 @@ The overlay plugin:
 
 - remembers its size and position
 - supports separate translation/original/warning fonts and colors
+- supports a native right-side dictionary pane with configurable width and typography
 - now includes a live preview in its settings dialog so style changes can be seen before saving
+
+### Overlay Dictionary
+
+The overlay dictionary is a native Sugoi Hook feature built into the Overlay Window plugin.
+
+Current behavior:
+
+- uses the bundled Jitendex dictionary from `dictionaries/jitendex`
+- builds a persistent local SQLite cache on first use
+- supports single-click / double-click lookup from overlay text
+- prefers the longest match around the clicked position
+- includes common Japanese deinflection and contraction handling
+- shows up to 3 match candidates for the chosen span
+
+Current limitations:
+
+- dictionary styling is configurable from the Overlay Window plugin settings
+- dictionary preview is not shown in the plugin settings dialog
 
 ## Runtime Files
 
@@ -217,6 +244,8 @@ Useful local state files:
   - plugin file names are the config keys, so renaming a plugin file creates a fresh config entry
 - `overlay_config.json`
   - overlay appearance and geometry
+- `dictionary_cache/`
+  - persistent local cache built from the bundled Jitendex data
 - `game_profiles.json`
   - saved per-game hook profile data used for engine recall and auto-hooking
 - `sugoihook-runtime.log`
@@ -243,6 +272,8 @@ OpenAI logging only emits when the app itself is running in debug mode, and the 
 ```text
 sugoi-hook/
 ├── SugoiHook_gui.py
+├── dictionary_backend.py
+├── dictionaries/
 ├── plugins/
 ├── luna_builds/
 ├── deep_translator/

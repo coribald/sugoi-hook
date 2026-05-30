@@ -36,12 +36,14 @@ REM an early native APPCRASH before Python startup on some Windows systems.
 python -m nuitka ^
     --onefile ^
     --include-raw-dir=luna_builds=luna_builds ^
+    --include-raw-dir=dictionaries=dictionaries ^
     --include-raw-dir=deep_translator=deep_translator ^
     --include-raw-dir=plugins=plugins ^
     --include-data-files=logo.webp=logo.webp ^
     --include-data-files=logo.ico=logo.ico ^
     --windows-icon-from-ico=logo.ico ^
     --enable-plugin=tk-inter ^
+    --include-module=dictionary_backend ^
     --include-module=tkinter.font ^
     --include-package=pystray ^
     --include-package=PIL ^

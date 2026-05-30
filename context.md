@@ -16,6 +16,10 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
   - all built-in plugins now inherit from `HookPlugin`
 - `deep_translator/`
   - vendored translation backend package used by the `Deep Translator` plugin
+- `dictionary_backend.py`
+  - native Jitendex-backed lookup/index/search backend used by the overlay dictionary pane
+- `dictionaries/`
+  - bundled Jitendex dictionary data used by the native overlay dictionary feature
 - `plugins_config.json`
   - active plugins
   - plugin settings
@@ -31,6 +35,7 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
 
 - Process/hook/output flow is source-first during iteration. We are mostly running from the `.py` path, not rebuilding constantly.
 - The plugin pipeline now has a shared pre-translation stage so translator input and clipboard input can stay aligned.
+- The overlay window now has an optional native right-side dictionary pane backed by Jitendex.
 - Output processing is asynchronous and latest-wins:
   - only one translation/output worker runs at a time
   - new lines replace older pending work
@@ -38,6 +43,7 @@ Sugoi Hook is a Windows/Tkinter GUI for attaching to a running game process, sel
 - Hook Concatenation is stateful and timing-sensitive. It should be treated carefully because many downstream behaviors depend on its output.
 - Translation plugins are expected to receive the cleaned untranslated line, not raw hook text.
 - The app now logs a lot of pipeline detail to both `sugoihook-runtime.log` and the source-run console.
+- The native dictionary backend is stdlib-only; no new pip dependencies were added for it.
 
 ## UI State
 
@@ -123,6 +129,17 @@ If behavior looks wrong, inspect:
 
 - The overlay plugin remembers its own size and position through `overlay_config.json`.
 - The plugin settings dialog now has a live preview for overlay fonts/colors/styles.
+- The overlay plugin now also exposes dictionary settings:
+  - enable/disable dictionary pane
+  - dictionary width
+  - font/size/color controls for dictionary headword, definitions, meta, and JP/EN examples
+- Those dictionary settings save/persist/apply correctly, but there is intentionally no dictionary live preview in the plugin settings dialog right now.
+- Overlay dictionary lookup is built around:
+  - bundled `dictionaries/jitendex`
+  - persistent SQLite cache under `dictionary_cache/`
+  - longest-match lookup around the clicked position
+  - common Japanese deinflection / contraction handling
+  - up to 3 candidates shown per chosen span
 - The settings dialog scrollbar was adjusted to avoid stealing the mouse wheel from selector/editor widgets, though this may still be worth rechecking if combobox popup behavior feels off in practice.
 
 ## Lifecycle / Stability Notes
@@ -144,6 +161,12 @@ If behavior looks wrong, inspect:
   - remember earlier fixes around Tk packaging, logging, and elevation heuristics
   - current packaged builds are Luna-only
   - current onefile builds store persistent config/log files beside `SugoiHook.exe`, while bundled runtime assets are extracted to the temporary onefile runtime folder
+  - current builds must bundle:
+    - `luna_builds/`
+    - `deep_translator/`
+    - `plugins/`
+    - `dictionaries/`
+    - `dictionary_backend.py`
 
 ## Today’s High-Level Changelog
 
@@ -151,6 +174,7 @@ If behavior looks wrong, inspect:
 - improved main window usability and layout, including compact/full geometry behavior
 - moved more status into explicit UI instead of hidden output/log-only behavior
 - added overlay settings live preview
+- added native Jitendex dictionary lookup inside the overlay window
 - repaired rolling OpenAI context so previous lines actually reach the prompt
 - aligned clipboard with translator input
 - fixed Hook Concatenation timing/output edge cases
