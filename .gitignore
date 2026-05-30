@@ -59,8 +59,11 @@ sugoihook-runtime.log
 SugoiHook_debug_builds/
 game_context/
 nuitka-crash-report.xml
+.yomitan-master/
 # Local shortcuts
 /*.lnk
 # Local runtime engine binaries
 /textractor_builds/
-
+# caches
+.tmp_dict_cache*/
+dictionary_cache/
