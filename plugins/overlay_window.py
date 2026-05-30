@@ -146,7 +146,8 @@ class OverlayWindowPlugin(HookPlugin):
             pass
 
     def _apply_dictionary_defaults(self):
-        self.config.update(self.DICTIONARY_DEFAULTS)
+        for key, value in self.DICTIONARY_DEFAULTS.items():
+            self.config.setdefault(key, value)
 
     def save_config(self):
         """Save configuration to JSON file"""
@@ -816,6 +817,23 @@ class OverlayWindowPlugin(HookPlugin):
             'max_height': (self.config['max_height'], 'int', 'Maximum Height (px)', None),
             'default_width': (self.config['default_width'], 'int', 'Default Width (px)', None),
             'default_height': (self.config['default_height'], 'int', 'Default Height (px)', None),
+            'dictionary_enabled': (self.config['dictionary_enabled'], 'bool', 'Enable Dictionary Pane', None),
+            'dictionary_width': (self.config['dictionary_width'], 'int_slider', 'Dictionary Width (px)', {'min': 220, 'max': 900}),
+            'dictionary_entry_font': (self.config['dictionary_entry_font'], 'choice', 'Dictionary Headword Font', fonts_dict),
+            'dictionary_entry_font_size': (self.config['dictionary_entry_font_size'], 'int_slider', 'Dictionary Headword Font Size', {'min': 8, 'max': 36}),
+            'dictionary_entry_color': (self.config['dictionary_entry_color'], 'color', 'Dictionary Headword Color', color_presets),
+            'dictionary_definition_font': (self.config['dictionary_definition_font'], 'choice', 'Dictionary Definition Font', fonts_dict),
+            'dictionary_definition_font_size': (self.config['dictionary_definition_font_size'], 'int_slider', 'Dictionary Definition Font Size', {'min': 8, 'max': 36}),
+            'dictionary_definition_color': (self.config['dictionary_definition_color'], 'color', 'Dictionary Definition Color', color_presets),
+            'dictionary_meta_font': (self.config['dictionary_meta_font'], 'choice', 'Dictionary Meta Font', fonts_dict),
+            'dictionary_meta_font_size': (self.config['dictionary_meta_font_size'], 'int_slider', 'Dictionary Meta Font Size', {'min': 8, 'max': 28}),
+            'dictionary_meta_color': (self.config['dictionary_meta_color'], 'color', 'Dictionary Meta Color', color_presets),
+            'dictionary_example_jp_font': (self.config['dictionary_example_jp_font'], 'choice', 'Dictionary JP Example Font', fonts_dict),
+            'dictionary_example_jp_font_size': (self.config['dictionary_example_jp_font_size'], 'int_slider', 'Dictionary JP Example Font Size', {'min': 8, 'max': 32}),
+            'dictionary_example_jp_color': (self.config['dictionary_example_jp_color'], 'color', 'Dictionary JP Example Color', color_presets),
+            'dictionary_example_en_font': (self.config['dictionary_example_en_font'], 'choice', 'Dictionary EN Example Font', fonts_dict),
+            'dictionary_example_en_font_size': (self.config['dictionary_example_en_font_size'], 'int_slider', 'Dictionary EN Example Font Size', {'min': 8, 'max': 32}),
+            'dictionary_example_en_color': (self.config['dictionary_example_en_color'], 'color', 'Dictionary EN Example Color', color_presets),
         }
 
     def set_setting(self, name: str, value) -> bool:
