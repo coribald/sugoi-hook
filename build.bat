@@ -36,7 +36,6 @@ REM an early native APPCRASH before Python startup on some Windows systems.
 python -m nuitka ^
     --onefile ^
     --include-raw-dir=luna_builds=luna_builds ^
-    --include-raw-dir=dictionaries=dictionaries ^
     --include-raw-dir=deep_translator=deep_translator ^
     --include-raw-dir=plugins=plugins ^
     --include-data-files=logo.webp=logo.webp ^
@@ -80,6 +79,9 @@ if exist "%PRESERVE_DIR%\*_config.json" (
     echo Restoring preserved runtime config files...
     copy /y "%PRESERVE_DIR%\*_config.json" "%OUTPUT_DIR%\" >nul
 )
+
+echo Copying dictionaries beside the onefile build...
+xcopy /e /i /y "dictionaries" "%OUTPUT_DIR%\dictionaries\" >nul
 
 echo Creating desktop-style launch shortcuts...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^

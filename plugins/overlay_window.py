@@ -523,7 +523,8 @@ class OverlayWindowPlugin(HookPlugin):
             self._debug("dictionary_unavailable", reason="app_context_missing")
             return
 
-        jitendex_dir = Path(app.base_path) / "dictionaries" / "jitendex"
+        dictionaries_root = self.get_runtime_dictionary_root()
+        jitendex_dir = dictionaries_root / "jitendex"
         if not jitendex_dir.exists():
             self.set_dictionary_text(
                 "No Jitendex dictionary was found.\n\n"
@@ -537,6 +538,26 @@ class OverlayWindowPlugin(HookPlugin):
         self.dictionary_backend.ensure_index_async()
         self._debug("dictionary_init", dictionary_dir=jitendex_dir, cache_dir=cache_dir)
         self.update_dictionary_status()
+
+    def get_runtime_dictionary_root(self) -> Path:
+        app = getattr(self, 'app', None)
+        if app is not None:
+            user_data_dir = getattr(app, 'user_data_dir', None)
+            if user_data_dir:
+                user_dictionary_root = Path(user_data_dir) / "dictionaries"
+                if user_dictionary_root.exists():
+                    return user_dictionary_root
+
+            base_path = getattr(app, 'base_path', None)
+            if base_path:
+                bundled_dictionary_root = Path(base_path) / "dictionaries"
+                if bundled_dictionary_root.exists():
+                    return bundled_dictionary_root
+
+        user_dictionary_root = get_runtime_user_data_path() / "dictionaries"
+        if user_dictionary_root.exists():
+            return user_dictionary_root
+        return Path(__file__).resolve().parent.parent / "dictionaries"
 
     def update_dictionary_status(self):
         if not self.config.get('dictionary_enabled', True):
